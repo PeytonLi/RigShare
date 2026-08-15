@@ -21,12 +21,14 @@ ideally the judge's. Both text the Linq number in **iMessage**, 1:1, never a gro
 - Orange tape on the HDMI. Visible in both photos or Condition will false-block.
 - Lender phone: text **`LEND HDMI`** with a photo of the taped cable.
   Expect back:
-  > Listed hdmi. $15 hold. You get $3 when it comes back. Borrower also pays a $2 RigShare fee (not taken from you). Mark it with orange tape.
+  > Got it. hdmi, orange tape. $0.50 hold. You get $0 when it comes back. Borrower also pays a $0 RigShare fee (not taken from you). Reply YES to list it. Mark the item so we can tell it apart.
+- Item is `pending` at this point and **cannot be borrowed**. Reply **`YES`**:
+  > Listed hdmi. $0.50 hold on the borrower. You get $0 when it comes back.
 - Dashboard `/` now shows one item, status `listed`. That is your opening shot.
 
-Note: the item is listed on `LEND`. There is **no `YES` step** in the code today —
-`YES` parses but has no handler and falls through to the generic "RigShare is live"
-reply. Do not say "now I confirm with YES" on camera.
+If you skip `YES`, `NEED HDMI` answers "Nothing listed for hdmi yet" — that is the
+confirmation gate working, not a bug. `YES` only ever confirms the sender's own
+most recent pending listing.
 
 ---
 
@@ -40,9 +42,9 @@ NEED HDMI
 
 Two messages come back, the second is a tappable link:
 
-> hdmi nearby, marked with orange tape. $15 hold now. $3 to the lender if you bring it back. $2 RigShare fee. $10 refunded.
+> hdmi nearby, marked with orange tape. $0.50 hold now. $0 to the lender if you bring it back. $0 RigShare fee. $0.50 refunded.
 
-**Say the three numbers out loud.** $3 lender, $2 RigShare, $10 back. Never "we keep $7".
+Prices are $0.50 / $0 / $0 while `DEMO_MODE` is on so anyone can Apple Pay. Set `DEMO_MODE=false` to restore HDMI $15.
 
 **Screen:** dashboard `/` — item flipped to `reserved`, a loan appeared in
 `awaiting_deposit`. Render task runs shows `quoteAndCharge`.
@@ -67,7 +69,7 @@ sharing, the *other* party's thread gets:
 
 Location is decoration. `GOT IT` is the handoff, never GPS.
 
-**Screen:** Stripe → Payments, the $15.00 PaymentIntent, succeeded. Then
+**Screen:** Stripe → Payments, the $0.50 PaymentIntent, succeeded. Then
 `/loans/<id>` showing `walking` and the `pi_...` id. Render shows `onDepositPaid`.
 
 ---
@@ -116,12 +118,12 @@ SETTLE <loan_id>
 ```
 
 Lender gets:
-> Returned. Lender $3. RigShare fee $2. Refunded $10. It can take a few days to show on the card.
+> Returned. Lender $0. RigShare fee $0. Refunded $0.50. It can take a few days to show on the card.
 
 Borrower gets:
-> Returned. Refunded $10. It can take a few days to show on the card. You're done.
+> Returned. Refunded $0.50. It can take a few days to show on the card. You're done.
 
-**Screen:** Stripe → the same PaymentIntent → **Refund $10.00**, `re_...`. Then
+**Screen:** Stripe → the same PaymentIntent → **Refund $0.50**, `re_...`. Then
 `/loans/<id>` showing `closed` with both the `pi_` and `re_` ids. Render shows
 `settle`. Card posting takes 5–10 days — show the Refund object, not the card.
 
@@ -129,22 +131,11 @@ Close on the dashboard: item back to `listed`, ready for the next borrower.
 
 ---
 
-## Cheap-deposit fallback (judge won't pay $15)
+## Restore real SKU prices
 
-`DEMO_DEPOSIT_CENTS=800` exists in `.env` and in `Settings`, but **nothing reads
-it** — `money.quote(sku, demo=True)` has no caller. Do not promise it on stage.
-
-What actually works: the loan copies its money off the **item row** at `NEED`
-time, so reprice the listed item before the judge texts:
-
-```sql
-UPDATE items SET deposit_cents = 800, rental_cents = 200, platform_fee_cents = 100
-WHERE sku = 'hdmi' AND status = 'listed';
-```
-
-Then `NEED HDMI` quotes $8 hold / $2 lender / $1 fee / **$5 refunded** and every
-message downstream says the right numbers. Reprice back to 1500/300/200 before the
-teammate films the real HDMI run.
+`DEMO_MODE` defaults on: every new `LEND` is $0.50 hold, $0 rental, $0 fee, $0.50
+refunded (Linq's minimum). Set `DEMO_MODE=false` on the Render env group and
+redeploy, then `LEND` again — old listed rows keep their old cents.
 
 ---
 

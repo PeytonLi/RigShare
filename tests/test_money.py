@@ -14,7 +14,7 @@ class TestRefundCents:
         assert refund_cents(2500, 500, 200) == 1800
 
     def test_demo_amounts(self) -> None:
-        assert refund_cents(800, 200, 100) == 500
+        assert refund_cents(50, 0, 0) == 50
 
 
 class TestAssertMoneyInvariant:
@@ -70,10 +70,10 @@ class TestQuote:
 
     def test_demo_override(self) -> None:
         q = quote("hdmi", demo=True)
-        assert q.deposit_cents == 800
-        assert q.rental_cents == 200
-        assert q.platform_fee_cents == 100
-        assert q.refund_cents == 500
+        assert q.deposit_cents == 50
+        assert q.rental_cents == 0
+        assert q.platform_fee_cents == 0
+        assert q.refund_cents == 50
         assert q.sku == "hdmi"
 
 

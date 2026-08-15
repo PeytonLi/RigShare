@@ -17,8 +17,9 @@ class Settings(BaseSettings):
     stripe_secret_key: str = ""
     stripe_mode: str = "live"
 
-    # PRD 4.1 nervous-judge fallback: flips every new listing to $8/$2/$1.
-    demo_mode: bool = False
+    # Temporary: every new listing is $0.50 / $0 / $0 so anyone can Apple Pay.
+    # Set DEMO_MODE=false to restore SKU prices (HDMI $15, charger $25).
+    demo_mode: bool = True
 
     lender_phone: str = "+14159909839"
     test_borrower_phone: str = "+17034051525"
@@ -26,9 +27,9 @@ class Settings(BaseSettings):
     default_deposit_cents: int = 2500
     default_rental_cents: int = 500
     default_platform_fee_cents: int = 200
-    demo_deposit_cents: int = 800
-    demo_rental_cents: int = 200
-    demo_platform_fee_cents: int = 100
+    demo_deposit_cents: int = 50
+    demo_rental_cents: int = 0
+    demo_platform_fee_cents: int = 0
 
     render_workflow_slug: str = ""
     require_clerk_settle: bool = False
