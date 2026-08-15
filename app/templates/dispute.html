@@ -6,14 +6,37 @@
     <title>Dispute {{ loan.id[:8] }}</title>
     <style>
       body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 2rem; max-width: 40rem; }
+      .photos { display: flex; gap: 1rem; }
+      .photos figure { flex: 1; margin: 0; }
+      .photos img { width: 100%; border: 1px solid #ccc; }
+      figcaption { font-weight: 600; margin-bottom: 0.25rem; }
       button { display: block; width: 100%; margin: 0.5rem 0; padding: 0.75rem; font-size: 1rem; }
     </style>
   </head>
   <body>
     <h1>RigShare dispute</h1>
     <p>Loan {{ loan.id[:8] }} · {{ item.sku if item else "" }} · state {{ loan.state }}</p>
-    <p>Outbound vs return. Pick one. This page is the Terac Activity URL.</p>
-    <form method="post" action="/disputes/{{ loan.id }}">
+    <p>Same cable going out and coming back? Look for the orange tape.</p>
+    <div class="photos">
+      <figure>
+        <figcaption>Outbound</figcaption>
+        {% if item and item.outbound_media_id %}
+          <img src="/media/{{ item.outbound_media_id }}" alt="outbound photo" />
+        {% else %}
+          <p>no outbound photo</p>
+        {% endif %}
+      </figure>
+      <figure>
+        <figcaption>Returned</figcaption>
+        {% if loan.return_media_id %}
+          <img src="/media/{{ loan.return_media_id }}" alt="return photo" />
+        {% else %}
+          <p>no return photo</p>
+        {% endif %}
+      </figure>
+    </div>
+    <p>Pixel difference metric: {{ loan.compare_metric if loan.compare_metric is not none else "n/a" }}</p>
+    <form method="post" action="/disputes/{{ loan.id }}?t={{ token }}">
       <button name="verdict" value="fine">Same item, fine</button>
       <button name="verdict" value="damaged">Same item, damaged</button>
       <button name="verdict" value="different">Different item</button>

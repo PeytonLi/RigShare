@@ -19,6 +19,8 @@ class FakeLinq:
         self.links: list[tuple[str, str]] = []
         self.payments: list[dict] = []
         self.locations: list[str] = []
+        self.media: dict[str, bytes] = {}
+        self.chat_locations: dict[str, tuple[float, float]] = {}
 
     def send_text(self, chat_id: str, text: str) -> None:
         self.texts.append((chat_id, text))
@@ -32,6 +34,12 @@ class FakeLinq:
     def create_payment_request(self, amount_cents: int, description: str, metadata: dict) -> PaymentRequest:
         self.payments.append({"amount": amount_cents, "description": description, "metadata": metadata})
         return PaymentRequest(id="pr_test", checkout_url="https://zero.linqapp.com/pay/test")
+
+    def download_media(self, media_id: str) -> bytes:
+        return self.media.get(media_id, b"fake-media-bytes")
+
+    def get_location(self, chat_id: str) -> tuple[float, float] | None:
+        return self.chat_locations.get(chat_id)
 
 
 _gateway: FakeLinq | None = None
@@ -57,6 +65,19 @@ def _live_post(path: str, payload: dict) -> dict:
     )
     response.raise_for_status()
     return response.json()
+
+
+def _live_get(path: str):
+    import httpx
+
+    settings = get_settings()
+    response = httpx.get(
+        f"{LINQ_API_BASE}{path}",
+        headers={"Authorization": f"Bearer {settings.linq_api_key}"},
+        timeout=20.0,
+    )
+    response.raise_for_status()
+    return response
 
 
 def send_text(chat_id: str, text: str) -> None:
@@ -93,3 +114,22 @@ def request_location(chat_id: str) -> None:
         _gateway.request_location(chat_id)
         return
     _live_post(f"/chats/{chat_id}/location/request", {})
+
+
+def download_media(media_id: str) -> bytes:
+    if _gateway is not None:
+        return _gateway.download_media(media_id)
+    return _live_get(f"/media/{media_id}").content
+
+
+def get_location(chat_id: str) -> tuple[float, float] | None:
+    """Last shared location for a 1:1 chat as (lat, lng). Linq sends [lng, lat]."""
+    if _gateway is not None:
+        return _gateway.get_location(chat_id)
+    data = _live_get(f"/chats/{chat_id}/location").json() or {}
+    if isinstance(data.get("location"), dict):
+        data = data["location"]
+    coords = data.get("coordinates") or []
+    if len(coords) < 2:
+        return None
+    return float(coords[1]), float(coords[0])

@@ -2,8 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.config import get_settings
 from app.skus import SKUS
+
+# Product defaults live here, not in Settings/.env. A leftover DEFAULT_* in a
+# local env file must not silently change hallway quotes or tests.
+DEFAULT_DEPOSIT_CENTS = 2500
+DEFAULT_RENTAL_CENTS = 500
+DEFAULT_PLATFORM_FEE_CENTS = 200
+DEMO_DEPOSIT_CENTS = 800
+DEMO_RENTAL_CENTS = 200
+DEMO_PLATFORM_FEE_CENTS = 100
 
 
 @dataclass(frozen=True)
@@ -33,22 +41,19 @@ def assert_money_invariant(
 
 
 def quote(sku: str | None, *, demo: bool = False) -> MoneyQuote:
-    # Read from settings, not module constants: PRD 4.1 wants these per-env so a
-    # nervous judge can be dropped to DEMO_* without a code change.
-    settings = get_settings()
     if demo:
-        deposit = settings.demo_deposit_cents
-        rental = settings.demo_rental_cents
-        fee = settings.demo_platform_fee_cents
+        deposit = DEMO_DEPOSIT_CENTS
+        rental = DEMO_RENTAL_CENTS
+        fee = DEMO_PLATFORM_FEE_CENTS
     elif sku is not None and sku in SKUS:
         item = SKUS[sku]
         deposit = item.deposit_cents
         rental = item.rental_cents
         fee = item.platform_fee_cents
     else:
-        deposit = settings.default_deposit_cents
-        rental = settings.default_rental_cents
-        fee = settings.default_platform_fee_cents
+        deposit = DEFAULT_DEPOSIT_CENTS
+        rental = DEFAULT_RENTAL_CENTS
+        fee = DEFAULT_PLATFORM_FEE_CENTS
 
     refund = refund_cents(deposit, rental, fee)
     assert_money_invariant(deposit, rental, fee)

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -35,11 +37,46 @@ def _default_starter(identifier: str, payload: dict[str, str]) -> Any:
     return "started"
 
 
+def _run_local_task(name: str, loan_id: str) -> None:
+    from app.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        if name == "inspectReturn":
+            from app.inspect import run_inspect_return
+
+            run_inspect_return(db, loan_id)
+        elif name == "quoteAndCharge":
+            from app.inspect import run_quote_and_charge
+
+            run_quote_and_charge(db, loan_id)
+        elif name == "openDispute":
+            from app.inspect import run_open_dispute
+
+            run_open_dispute(db, loan_id)
+        elif name == "forfeit":
+            from app.disputes import apply_forfeit
+            from app.models import Loan
+
+            loan = db.get(Loan, loan_id)
+            if loan is not None:
+                apply_forfeit(db, loan)
+        db.commit()
+    except Exception:
+        db.rollback()
+        log.exception("Local task %s failed", name)
+    finally:
+        db.close()
+
+
 def start_task(name: str, loan_id: str) -> str | None:
     settings = get_settings()
     if not settings.render_workflow_slug:
-        log.info("Render workflow slug not configured; skipping task %s", name)
-        return None
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            log.info("Render workflow slug not configured; skipping task %s", name)
+            return None
+        threading.Thread(target=_run_local_task, args=(name, loan_id), daemon=True).start()
+        return "local"
 
     identifier = f"{settings.render_workflow_slug}/{name}"
     payload = {"loan_id": loan_id}

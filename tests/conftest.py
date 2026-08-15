@@ -25,9 +25,13 @@ os.environ["LINQ_WEBHOOK_SECRET"] = TEST_WEBHOOK_SECRET
 import pytest
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.linq_client import FakeLinq, set_linq_gateway
 
+# Tests must depend only on the environment set above. Left alone, Settings also
+# reads the developer's real .env, where a value beats monkeypatch.delenv -- so
+# filling in RENDER_WORKFLOW_SLUG locally broke a test that had always passed.
+Settings.model_config["env_file"] = None
 get_settings.cache_clear()
 
 

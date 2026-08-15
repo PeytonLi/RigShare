@@ -38,19 +38,31 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def init_db() -> None:
-    from sqlalchemy import text
+    """Create missing tables, then backfill columns added after a table shipped.
+
+    create_all never alters an existing table, so any column added later is
+    absent in an already-deployed database and every SELECT on that model
+    500s. This used to be a hand-written ALTER list, which is how
+    items.lender_chat_id got missed and took out the dashboard. Reconciling
+    against the metadata instead means adding a column to models.py is enough.
+    """
+    from sqlalchemy import inspect, text
 
     from app.models import Base
 
     Base.metadata.create_all(bind=engine)
-    extras = (
-        "ALTER TABLE loans ADD COLUMN IF NOT EXISTS band_room_id VARCHAR",
-        "ALTER TABLE loans ADD COLUMN IF NOT EXISTS sandbox_id VARCHAR",
-        "ALTER TABLE loans ADD COLUMN IF NOT EXISTS compare_metric INTEGER",
-        "ALTER TABLE loans ADD COLUMN IF NOT EXISTS terac_opportunity_id VARCHAR",
-        "ALTER TABLE items ADD COLUMN IF NOT EXISTS lender_chat_id VARCHAR",
-    )
-    if engine.dialect.name == "postgresql":
-        with engine.begin() as conn:
-            for stmt in extras:
-                conn.execute(text(stmt))
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if not inspector.has_table(table.name):
+                continue
+            existing = {c["name"] for c in inspector.get_columns(table.name)}
+            for column in table.columns:
+                # NOT NULL needs a default to backfill; those only appear on
+                # tables create_all just made, which already have them.
+                if column.name in existing or not column.nullable:
+                    continue
+                ddl = column.type.compile(engine.dialect)
+                conn.execute(
+                    text(f"ALTER TABLE {table.name} ADD COLUMN {column.name} {ddl}")
+                )

@@ -40,8 +40,9 @@ def home(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     loans = db.execute(select(Loan).order_by(Loan.created_at.desc())).scalars().all()
     items = db.execute(select(Item).order_by(Item.created_at.desc())).scalars().all()
     return TEMPLATES.TemplateResponse(
+        request,
         "home.html",
-        {"request": request, "loans": loans, "items": items, "settings": get_settings()},
+        {"loans": loans, "items": items, "settings": get_settings()},
     )
 
 
@@ -52,8 +53,9 @@ def loan_detail(loan_id: str, request: Request, db: Session = Depends(get_db)) -
         return HTMLResponse("loan not found", status_code=404)
     item = db.get(Item, loan.item_id)
     return TEMPLATES.TemplateResponse(
+        request,
         "loan.html",
-        {"request": request, "loan": loan, "item": item},
+        {"loan": loan, "item": item},
     )
 
 
@@ -122,7 +124,41 @@ def dispute(loan_id: str, request: Request, db: Session = Depends(get_db)) -> HT
     if loan is None:
         return HTMLResponse("loan not found", status_code=404)
     item = db.get(Item, loan.item_id)
+    token = request.query_params.get("t") or loan.dispute_token or ""
     return TEMPLATES.TemplateResponse(
+        request,
         "dispute.html",
-        {"request": request, "loan": loan, "item": item},
+        {"loan": loan, "item": item, "token": token},
     )
+
+
+@app.post("/disputes/{loan_id}")
+async def dispute_submit(loan_id: str, request: Request, db: Session = Depends(get_db)):
+    from fastapi.responses import RedirectResponse
+
+    from app.disputes import apply_verdict
+
+    loan = db.get(Loan, loan_id)
+    if loan is None:
+        return HTMLResponse("loan not found", status_code=404)
+    token = request.query_params.get("t")
+    if loan.dispute_token and token != loan.dispute_token:
+        return HTMLResponse("bad dispute token", status_code=403)
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        body = await request.json()
+        verdict = str(body.get("verdict") or "")
+        submission_id = body.get("terac_submission_id")
+    else:
+        form = await request.form()
+        verdict = str(form.get("verdict") or "")
+        submission_id = form.get("terac_submission_id")
+    if submission_id:
+        loan.terac_submission_id = str(submission_id)
+    try:
+        apply_verdict(db, loan, verdict)
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return RedirectResponse(url=f"/loans/{loan.id}", status_code=303)

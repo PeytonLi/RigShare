@@ -73,6 +73,35 @@ def main() -> int:
         print("generate", gen)
     except urllib.error.HTTPError as exc:
         print("WARN generate", exc.code, exc.read()[:400])
+        return 1
+    gen_job_id = gen.get("job_id")
+    if not gen_job_id:
+        print("FAIL no job_id returned from /generate")
+        return 1
+    print("wait for dataset to finish generating")
+    for _ in range(80):
+        time.sleep(15)
+        try:
+            status = _get(f"/generate/jobs/{gen_job_id}", key)
+        except urllib.error.HTTPError as exc:
+            print("WARN poll generate", exc.code)
+            continue
+        print("generate status", status.get("status"))
+        if status.get("status") in {"ready", "failed"}:
+            if status.get("status") == "failed":
+                print("FAIL generation failed", json.dumps(status, indent=2)[:2000])
+                return 1
+            break
+    else:
+        print("FAIL generation still not ready after poll; check /generate/jobs/"
+              f"{gen_job_id} later")
+        return 1
+    try:
+        ds = _get(f"/felix/datasets/{DATASET}", key)
+        print("dataset ready", ds.get("name"), "count=", ds.get("count"), ds.get("status"))
+    except urllib.error.HTTPError as exc:
+        print("FAIL dataset check", exc.code, exc.read()[:400])
+        return 1
     print("start LoRA job")
     try:
         job = _post(

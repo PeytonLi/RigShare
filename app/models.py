@@ -71,9 +71,15 @@ class Loan(Base):
     sandbox_id: Mapped[str | None] = mapped_column(String, nullable=True)
     compare_metric: Mapped[int | None] = mapped_column(Integer, nullable=True)
     terac_opportunity_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    terac_verdict: Mapped[str | None] = mapped_column(String, nullable=True)
+    terac_submission_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    dispute_token: Mapped[str | None] = mapped_column(String, nullable=True)
+    return_media_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    manual_refund_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     borrower_got_it_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     lender_got_it_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     return_by_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    forfeited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow

@@ -11,7 +11,13 @@ from app.clerk import can_lender_settle
 from app.commands import CommandKind, parse_command
 from app.config import get_settings
 from app.ingest import enrich_command
-from app.linq_client import create_payment_request, request_location, send_link, send_text
+from app.linq_client import (
+    create_payment_request,
+    get_location,
+    request_location,
+    send_link,
+    send_text,
+)
 from app.workflows_client import start_task
 from app.linq_webhook import (
     event_id,
@@ -59,6 +65,41 @@ def handle_linq_event(session: Session, event: dict) -> None:
     if kind == "payment.succeeded":
         handle_payment_succeeded(session, event)
         return
+    if kind == "location.sharing.started":
+        handle_location_sharing(session, event)
+        return
+
+
+def handle_location_sharing(session: Session, event: dict) -> None:
+    """One maps pin to the other party when someone starts sharing during the walk.
+
+    PRD 7.2: never infer GOT IT from GPS. Location is wow, not source of truth.
+    """
+    # ponytail: webhook-driven only, one pin per share event. PLAN Phase 7 also
+    # wants a 2-3 min poll while `walking`, which needs a scheduler this app does
+    # not have. Upgrade path: a Render Workflows cron task that calls
+    # get_location() for every loan still in `walking`.
+    chat_id = inbound_chat_id(event)
+    if not chat_id:
+        return
+    loan = session.execute(
+        select(Loan)
+        .where(
+            or_(Loan.borrower_chat_id == chat_id, Loan.lender_chat_id == chat_id),
+            Loan.state == "walking",
+        )
+        .order_by(Loan.created_at.desc())
+    ).scalars().first()
+    if loan is None:
+        return
+    point = get_location(chat_id)
+    if point is None:
+        return
+    other = loan.lender_chat_id if chat_id == loan.borrower_chat_id else loan.borrower_chat_id
+    if not other or other == chat_id:
+        return
+    lat, lng = point
+    send_text(other, f"They're on the way: https://maps.google.com/?q={lat},{lng}")
 
 
 def handle_inbound(session: Session, event: dict) -> None:
@@ -184,6 +225,8 @@ def handle_inbound(session: Session, event: dict) -> None:
             send_text(chat_id, "That loan is not out yet. Both sides reply GOT IT first.")
             return
         loan.state = "returning"
+        if media:
+            loan.return_media_id = media[0]
         send_text(
             chat_id,
             f"Return photo in. Lender: reply SETTLE {loan.id} if it matches (orange tape).",
@@ -293,7 +336,11 @@ def _settle(session: Session, loan: Loan, chat_id: str) -> None:
     if not loan.stripe_payment_intent_id:
         send_text(chat_id, "No Stripe payment intent on this loan yet. Cannot refund.")
         return
-    amount = refund_cents(loan.deposit_cents, loan.rental_cents, loan.platform_fee_cents)
+    amount = (
+        loan.manual_refund_cents
+        if loan.manual_refund_cents is not None
+        else refund_cents(loan.deposit_cents, loan.rental_cents, loan.platform_fee_cents)
+    )
     refund_id = refund_payment_intent(
         loan.stripe_payment_intent_id,
         amount,
@@ -304,6 +351,10 @@ def _settle(session: Session, loan: Loan, chat_id: str) -> None:
     item = session.get(Item, loan.item_id)
     if item is not None:
         item.status = "listed"
+    if loan.sandbox_id:
+        from app.superserve_client import kill_sandbox
+
+        kill_sandbox(loan.sandbox_id)
     send_text(
         chat_id,
         f"Returned. Lender {_dollars(loan.rental_cents)}. "

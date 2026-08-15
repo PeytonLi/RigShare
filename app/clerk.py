@@ -34,7 +34,11 @@ def apply_clerk_settle(session: Session, loan_id: str, event_id: str) -> Loan:
     if not loan.stripe_payment_intent_id:
         raise ValueError("no payment intent")
 
-    amount = refund_cents(loan.deposit_cents, loan.rental_cents, loan.platform_fee_cents)
+    amount = (
+        loan.manual_refund_cents
+        if loan.manual_refund_cents is not None
+        else refund_cents(loan.deposit_cents, loan.rental_cents, loan.platform_fee_cents)
+    )
     refund_id = refund_payment_intent(
         loan.stripe_payment_intent_id,
         amount,
@@ -49,6 +53,9 @@ def apply_clerk_settle(session: Session, loan_id: str, event_id: str) -> Loan:
 
 
 def can_lender_settle(loan: Loan) -> bool:
-    if get_settings().require_clerk_settle:
+    settings = get_settings()
+    if loan.state == "blocked" and not loan.terac_verdict and settings.require_clerk_settle:
+        return False
+    if settings.require_clerk_settle:
         return bool(loan.clerk_settle_event_id)
     return True
