@@ -32,12 +32,12 @@ def _loan(db, **overrides) -> Loan:
         platform_fee_cents=200,
     )
     db.add(item)
+    overrides.setdefault("state", "inspecting")
     loan = Loan(
         id=uuid.uuid4().hex,
         item_id=item.id,
         borrower_user_id=borrower.id,
         lender_user_id=lender.id,
-        state="inspecting",
         borrower_chat_id="chat_b",
         lender_chat_id="chat_l",
         deposit_cents=1500,
