@@ -1,6 +1,6 @@
 # RigShare
 
-Text a real iMessage number. Borrow a USB-C charger, Lightning cable, HDMI, or dongle. Pay a $100 hold. Bring it back. Get most of it back.
+Text a real iMessage number. Borrow a USB-C charger, Lightning cable, HDMI, or dongle. Pay a hold around what it costs to replace. Bring it back. Get most of it back.
 
 Docs: [PRD](docs/PRD.md) · [Plan](docs/PLAN.md) · [Preflight](docs/PREFLIGHT.md)
 
@@ -18,7 +18,7 @@ Copy `.env.example` to `.env`. Never commit `.env` or `agent_config.yaml`.
 
 ### Connect this repo
 
-1. GitHub repo: [`PeytonLi/RigShare`](https://github.com/PeytonLi/RigShare) (private).
+1. GitHub repo: [`PeytonLi/RigShare`](https://github.com/PeytonLi/RigShare).
 2. In [Render Dashboard](https://dashboard.render.com) → your project → **New** → **Blueprint**.
 3. Connect GitHub if prompted, pick **`PeytonLi/RigShare`**, confirm `render.yaml`.
 4. Apply. Wait until `rigshare` is live and `/health` returns `{"ok":true}`.
@@ -39,3 +39,7 @@ Create an **Environment Group** named `rigshare-secrets`. Paste everything from 
 1. Linq dashboard → webhook URL `https://<your-service>.onrender.com/webhooks/linq` (that route is not wired yet; do this after the next code drop).
 2. Copy the signing secret into `LINQ_WEBHOOK_SECRET`.
 3. Dashboard → **New** → **Workflows** (Python). Same repo. Workflows cannot go in `render.yaml`.
+   - Build: `pip install -r requirements.txt`
+   - Start: `python main.py` (this is the Workflows file at repo root, not FastAPI)
+   - Python: `.python-version` pins `3.12.7`. If the service already exists, also set `PYTHON_VERSION=3.12.7` on it so it stops using 3.14.
+   - Link `rigshare-secrets` on Workflows the same way as web/worker. Do not put `DATABASE_URL` in the group.

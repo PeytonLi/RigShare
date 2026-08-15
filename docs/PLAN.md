@@ -63,7 +63,7 @@ If webhooks fail, we are not allowed to "build locally and demo with curl." Linq
 
 ## Phase 2 — Money loop (the whole company) (60–90 min)
 
-Goal: $1 (then $100) charge and partial refund **without** borrowing logic.
+Goal: $1 (then a real SKU deposit, HDMI **$15**) charge and partial refund **without** borrowing logic.
 
 1. `POST /v3/payment_requests` with `metadata.loan_id=test`
 2. Send `checkout_url` as a **link** part to your phone
@@ -74,7 +74,7 @@ Goal: $1 (then $100) charge and partial refund **without** borrowing logic.
 
 **Exit:** Stripe Dashboard shows a succeeded PaymentIntent and a Refund. iMessage showed the pay card. This is the agent-run-company screenshot.
 
-Do this at **$100** once with a teammate as soon as $1 works. Do not wait until Sunday.
+Do this at **$15** (HDMI) once with a teammate as soon as $1 works. Do not wait until Sunday.
 
 Idempotency: if the same `payment.succeeded` is delivered twice, do not create two refunds in this test script. Same code path as production `settle`.
 
@@ -176,7 +176,7 @@ Paste public URL into Replay QA. Fix real bugs. File false positives. Do not reb
 - Orange tape on **every** cable: USB-C charger, Lightning, HDMI, dongle
 - Two iPhones charged, Apple Pay working, iMessage (not SMS) to the Linq number
 - Laptop windows: Band room, Stripe payment, Render task runs, dashboard, Terac opportunity
-- Fallback deposit $20 item in DB if judge hesitates
+- Fallback deposit $8 item in DB if judge hesitates
 - Script printed in `docs/DEMO.md` (write when Phase 3 works)
 
 ---

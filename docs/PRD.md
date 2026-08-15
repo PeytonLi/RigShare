@@ -1,7 +1,7 @@
 # RigShare PRD
 
 **Product:** RigShare  
-**One-liner:** Text a real iMessage number to borrow a cable, charger, or dongle. Pay a large deposit in the thread. Return the item. Get most of it back. Steal it and you don't.
+**One-liner:** Text a real iMessage number to borrow a cable, charger, or dongle. Pay a deposit around replacement cost. Return the item. Get most of it back. Steal it and you don't.
 
 **Hackathon job:** Real-world demo in a hallway with two iPhones, a bag of marked cables (USB-C charger, Lightning, HDMI, dongle), Apple Pay, and a laptop showing Band + Stripe + Render + a Terac judgment.
 
@@ -13,7 +13,7 @@
 
 At events, people need a USB-C charger, a Lightning cable, an HDMI, a dongle. Someone in the room has it. Finding that person is Slack noise. Trusting a stranger with your $20 brick is the actual blocker. Venmo-after-the-fact does not prevent walking off.
 
-RigShare makes the hold the product. $100 up front via Apple Pay in iMessage. On a clean return the borrower gets back deposit minus rental minus a **borrower-paid platform fee**. Default: **$20** to the lender, **$5** to RigShare, **$75** refunded. Every item has **orange tape or a sticky note** so "returned the wrong one" is visible.
+RigShare makes the hold the product. Deposit is **about what the thing costs to replace** (default charger: **$25** via Apple Pay in iMessage), not a $100 scare. On a clean return the borrower gets back deposit minus rental minus a **borrower-paid platform fee**. Default charger: **$5** to the lender, **$2** to RigShare, **$18** refunded. Every item has **orange tape or a sticky note** so "returned the wrong one" is visible.
 
 Seed inventory this weekend is **your bag**. You are lender #1 (`+14159909839`). Third-party lenders are the same money path with a Venmo payout later.
 
@@ -36,7 +36,7 @@ Borrower and lender never share an iMessage group in v1. RigShare is the switchb
 If this loop does not work on a stranger's phone, we do not ship a story. We ship a bug.
 
 1. Borrower texts the **real Linq number** from **their** iPhone.
-2. They Apple Pay the deposit in the thread (default **$100.00**).
+2. They Apple Pay the deposit in the thread (SKU table; charger default **$25.00**).
 3. Lender walks the physical item across the room. Optional: Find My updates in the borrower's thread.
 4. Both reply `GOT IT`.
 5. Borrower photos the item on return (orange tape visible).
@@ -55,12 +55,12 @@ Linq Agent Pay charges. Linq **cannot refund**. Refunds are Stripe API on **your
 
 Stored per item / env, not hardcoded in copy:
 
-| Field | Default | Meaning |
+| Field | Default (charger / unknown SKU) | Meaning |
 |---|---|---|
-| `deposit_cents` | `10000` ($100.00) | Charged before handoff |
-| `rental_cents` | `2000` ($20.00) | Goes to the lender on clean return (owed in DB; Venmo this weekend) |
-| `platform_fee_cents` | `500` ($5.00) | RigShare's take. Charged to the **borrower**, not carved out of the lender after Stripe |
-| Refund | `deposit − rental − platform_fee` | default **$75.00** (`7500`) |
+| `deposit_cents` | `2500` ($25.00) | Charged before handoff. Per SKU ≈ replacement cost |
+| `rental_cents` | `500` ($5.00) | Goes to the lender on clean return (owed in DB; Venmo this weekend) |
+| `platform_fee_cents` | `200` ($2.00) | RigShare's take. Charged to the **borrower**, not carved out of the lender after Stripe. Covers Stripe (~$1 on a $25 charge) |
+| Refund | `deposit − rental − platform_fee` | default **$18.00** (`1800`) |
 
 Invariant (code must enforce):
 
@@ -72,33 +72,33 @@ rental_cents + platform_fee_cents < deposit_cents
 
 Linq `amount` is **integer cents**. Minimum charge is **50 cents**.
 
-Do **not** take a percentage of `rental_cents` this weekend. A 15% cut of $20 is $3, and Stripe on a $100 charge is about $3.20, so you lose money. The $5 platform fee is the company. The $20 is the lender's.
+Do **not** take a percentage of `rental_cents` this weekend. A 15% cut of $5 is $0.75, and Stripe on a $25 charge is about $1.03, so a percent-of-rental take loses money. The **$2** platform fee is the company. The **$5** is the lender's.
 
 **You are the vendor when the item is yours.** Lender payout is $0 extra. You keep `rental_cents + platform_fee_cents` minus Stripe. Demo HDMI in your bag = this path.
 
 **You are the marketplace when someone else listed.** You still charge/refund the borrower. You owe the lender `rental_cents`. You keep `platform_fee_cents` minus Stripe. Payout is Venmo/Cash App, recorded as `lender_payout_cents` / `lender_paid_at`.
 
-Demo override: env `DEMO_DEPOSIT_CENTS=2000`, `DEMO_RENTAL_CENTS=400`, `DEMO_PLATFORM_FEE_CENTS=100` so a nervous judge can do $20 / $4 / $1 without a code change. The $100 path must still work for teammates on camera.
+Demo override: env `DEMO_DEPOSIT_CENTS=800`, `DEMO_RENTAL_CENTS=200`, `DEMO_PLATFORM_FEE_CENTS=100` so a nervous judge can do $8 / $2 / $1 without a code change. The normal SKU path (HDMI $15, charger $25) is what teammates film.
 
 ### 4.2 Ledger
 
-Default clean return ($100 hold):
+Default clean return ($25 charger hold):
 
 ```
-Borrower --$100 Apple Pay--> RigShare Stripe (you are merchant of record)
-On SETTLE:                 Stripe partial refund $75 to borrower
-Lender owed:               $20  (Venmo if third party; skip if you are the lender)
-RigShare keeps:            $5 platform fee
-Stripe fee on $100:        ~2.9% + $0.30 ≈ $3.20 (usually not returned on partial refund)
-RigShare net:              ~$1.80 if you paid a third-party lender $20
-                           ~$21.80 if you are the lender ($20 + $5 − $3.20)
+Borrower --$25 Apple Pay--> RigShare Stripe (you are merchant of record)
+On SETTLE:                 Stripe partial refund $18 to borrower
+Lender owed:               $5  (Venmo if third party; skip if you are the lender)
+RigShare keeps:            $2 platform fee
+Stripe fee on $25:         ~2.9% + $0.30 ≈ $1.03 (usually not returned on partial refund)
+RigShare net:              ~$0.97 if you paid a third-party lender $5
+                           ~$5.97 if you are the lender ($5 + $2 − $1.03)
 ```
 
-iMessage must show three numbers, never "we keep $25":
+iMessage must show three numbers, never "we keep $7":
 
-> **$100 hold.** **$20** to the lender when it comes back. **$5** RigShare fee. **$75** refunded to you.
+> **$25 hold.** **$5** to the lender when it comes back. **$2** RigShare fee. **$18** refunded to you.
 
-The $100 is a **liability**, not revenue. Do not spend deposits. Revenue is `platform_fee_cents` plus `rental_cents` only when you are the lender, minus Stripe.
+The deposit is a **liability**, not revenue. Do not spend deposits. Revenue is `platform_fee_cents` plus `rental_cents` only when you are the lender, minus Stripe.
 
 Card refund posting is **not instant** (often 5–10 days). Demo the Stripe Dashboard `Refund` object and the iMessage confirmation. That is enough.
 
@@ -124,18 +124,18 @@ Condition / ingest **blocks** lend intent if GLiNER item is in `{laptop, phone, 
 
 SKUs are rows, not hardcoded iMessage copy. GLiNER `item` + `connector` maps onto `sku`. Mark **every** physical piece with orange tape.
 
-| sku | What they text | Default `rental_cents` | Notes |
-|---|---|---|---|
-| `usbc_charger` | usb-c charger, gan, anker brick, mac charger | 1500 ($15) | Highest demand. Bring two if you can. |
-| `lightning_cable` | lightning, iphone charger cable | 800 ($8) | Still everywhere. |
-| `usbc_cable` | usb-c cable, usbc to usbc | 800 ($8) | |
-| `hdmi` | hdmi, hdmi 6ft | 1500 ($15) | Projectors. |
-| `usbc_hdmi` | usb-c to hdmi, hdmi dongle | 1500 ($15) | |
-| `usbc_hub` | dongle, usb-c hub, multiport | 2000 ($20) | |
-| `lightning_usbc` | lightning to usb-c | 800 ($8) | |
-| `clicker` | clicker, presenter, logitech pointer | 1000 ($10) | Optional. |
+| sku | What they text | `deposit_cents` | `rental_cents` | Notes |
+|---|---|---|---|---|
+| `usbc_charger` | usb-c charger, gan, anker brick, mac charger | 2500 ($25) | 500 ($5) | Highest demand. Bring two if you can. Brick ~$20. |
+| `lightning_cable` | lightning, iphone charger cable | 1500 ($15) | 300 ($3) | Still everywhere. |
+| `usbc_cable` | usb-c cable, usbc to usbc | 1200 ($12) | 200 ($2) | |
+| `hdmi` | hdmi, hdmi 6ft | 1500 ($15) | 300 ($3) | Projectors. Cable ~$12. |
+| `usbc_hdmi` | usb-c to hdmi, hdmi dongle | 2000 ($20) | 500 ($5) | |
+| `usbc_hub` | dongle, usb-c hub, multiport | 3000 ($30) | 800 ($8) | Hub ~$25–35. |
+| `lightning_usbc` | lightning to usb-c | 1500 ($15) | 300 ($3) | |
+| `clicker` | clicker, presenter, logitech pointer | 2500 ($25) | 500 ($5) | Optional. |
 
-Deposit and platform fee stay **$100 / $5** across SKUs unless the demo-fallback item is used. Rental is what changes.
+Platform fee is **$2** (`200`) on every SKU. Deposit is replacement-ish so walking off is dumber than buying one. Rental is a few-hour convenience fee, not "almost the Amazon price." Unknown SKU uses the charger defaults ($25 / $5 / $2).
 
 If Terac Saturday survey says "nobody forgets HDMI, everyone needs USB-C bricks," we reorder this table and the Matcher prompt. That is a real before/after, not a slide.
 
@@ -164,11 +164,11 @@ Free text still goes through GLiNER2. Commands are the fallback.
 
 ### 5.1 Lender listing
 
-Inbound: photo of HDMI with orange tape, plus `hdmi 6ft, $20`.
+Inbound: photo of HDMI with orange tape, plus `hdmi 6ft`.
 
 Outbound:
 
-> Got it. HDMI 6ft, orange tape. **$100 hold.** You get **$20** when it comes back. Borrower also pays a **$5** RigShare fee (not taken from you).  
+> Got it. HDMI 6ft, orange tape. **$15 hold.** You get **$3** when it comes back. Borrower also pays a **$2** RigShare fee (not taken from you).  
 > Reply YES to list it. Mark the item so we can tell it apart.
 
 On YES: item `listed`.
@@ -179,8 +179,8 @@ Inbound: `need hdmi for projector 2 hrs`.
 
 Outbound (after Matcher):
 
-> USB-C charger nearby, marked with orange tape.  
-> **$100 hold** now. **$15** to the lender if you bring it back. **$5** RigShare fee. **$80** refunded.  
+> HDMI nearby, marked with orange tape.  
+> **$15 hold** now. **$3** to the lender if you bring it back. **$2** RigShare fee. **$10** refunded.  
 > Pay here: [Agent Pay / link card]
 
 Do not hand off until `payment.succeeded`.
@@ -198,7 +198,7 @@ Lender gets the inverse.
 
 ### 5.5 Settled
 
-> Returned. Lender **$20**. RigShare fee **$5**. Refunded **$75**. It can take a few days to show on the card. You're done.
+> Returned. Lender **$3**. RigShare fee **$2**. Refunded **$10**. It can take a few days to show on the card. You're done.
 
 ### 5.6 Blocked (wrong/damaged item)
 
@@ -383,7 +383,7 @@ Workflows do not sleep-until-webhook. Each webhook starts the next task. `inspec
 
 | Prize | How we actually use it |
 |---|---|
-| Linq | Real number, Agent Pay $100, link card, optional location, inbound photos, two 1:1 threads |
+| Linq | Real number, Agent Pay at SKU deposit, link card, optional location, inbound photos, two 1:1 threads |
 | Band | Matcher finding changes the item; Condition can BLOCK refund; Clerk is the only SETTLE; room per loan |
 | Terac | Catalog survey Saturday (inventory before/after). Disputed returns: Clerk hires a human inspector; SETTLE waits on that verdict |
 | Superserve | Pause VM with outbound photo; resume to compare return |
@@ -400,7 +400,7 @@ Workflows do not sleep-until-webhook. Each webhook starts the next task. `inspec
 |---|---|
 | Stripe `charges_enabled` false | Connect Friday. $1 test charge to yourself before any feature. |
 | App Clip not live for 24h | Always send `link` part. Web checkout works. |
-| Judge will not pay $100 | Item-level / env deposit. Teammate still films $100. |
+| Judge will not pay $25 | Demo SKU / env `$8`. Teammate still films a real HDMI `$15`. |
 | Linq refund confusion | Never call Linq for refunds. Only Stripe. |
 | Location empty | GOT IT is the handoff. Location optional. |
 | Band used as a log | Clerk SETTLE is a hard gate in `settle` task. |

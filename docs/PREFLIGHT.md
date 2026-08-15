@@ -178,11 +178,11 @@ Reply only if you want something else.
 
 | Decision | Default |
 |---|---|
-| Default deposit | $100.00 (`10000`) |
-| Default rental to lender | $20.00 (`2000`) |
-| Default platform fee (borrower-paid) | $5.00 (`500`) |
-| Refund | deposit − rental − fee = $75 |
-| Demo fallback item | $20 deposit / $4 rental / $1 fee, same code |
+| Default deposit | $25.00 charger (`2500`); HDMI $15; hub $30 |
+| Default rental to lender | $5.00 charger (`500`); HDMI $3 |
+| Default platform fee (borrower-paid) | $2.00 (`200`) |
+| Refund | deposit − rental − fee = $18 on charger |
+| Demo fallback item | $8 deposit / $2 rental / $1 fee, same code |
 | Item cap | Refuse laptop/phone/camera/etc. and stated value > $80 |
 | Lender payout | Manual Venmo. DB records amount owed only |
 | Status UI | FastAPI HTML dashboard, not iMessage App |
