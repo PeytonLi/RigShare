@@ -1,0 +1,9 @@
+.env
+.env.local
+.cursor/
+agent_config.yaml
+__pycache__/
+.venv/
+venv/
+*.pyc
+.DS_Store

@@ -1,0 +1,37 @@
+# https://render.com/docs/blueprint-spec
+# Workflows are NOT supported in Blueprints. Create that service in the Dashboard.
+
+services:
+  - type: web
+    name: rigshare
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: rigshare-db
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+
+  - type: worker
+    name: rigshare-agents
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m agents.worker
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: rigshare-db
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+
+databases:
+  - name: rigshare-db
+    plan: basic-256mb
+    postgresMajorVersion: 16
