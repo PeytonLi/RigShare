@@ -124,7 +124,7 @@ def handle_inbound(session: Session, event: dict) -> None:
         if sku is None:
             send_text(chat_id, "What are you lending? Reply LEND HDMI, LEND USB-C, or LEND LIGHTNING. Orange tape on it.")
             return
-        money = quote(sku)
+        money = quote(sku, demo=settings.demo_mode)
         item = Item(
             id=uuid.uuid4().hex,
             sku=sku,

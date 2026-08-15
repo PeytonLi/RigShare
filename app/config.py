@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     stripe_secret_key: str = ""
     stripe_mode: str = "live"
 
+    # PRD 4.1 nervous-judge fallback: flips every new listing to $8/$2/$1.
+    demo_mode: bool = False
+
     lender_phone: str = "+14159909839"
     test_borrower_phone: str = "+17034051525"
 
