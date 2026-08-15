@@ -34,6 +34,8 @@ from app.commands import CommandKind, ParsedCommand, parse_command
                 raw="SETTLE loan_abc123",
             ),
         ),
+        ("PAID", ParsedCommand(kind=CommandKind.PAID, sku=None, loan_id=None, raw="PAID")),
+        ("i paid", ParsedCommand(kind=CommandKind.PAID, sku=None, loan_id=None, raw="i paid")),
     ],
 )
 def test_exact_commands(text: str, expected: ParsedCommand) -> None:

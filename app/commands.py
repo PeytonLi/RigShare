@@ -58,6 +58,7 @@ class ParsedCommand:
     # Lender-set price, in cents. None means "use the SKU table".
     deposit_cents: int | None = None
     rental_cents: int | None = None
+    entities: dict[str, str] | None = None
 
 
 # "LEND HDMI 20", "LEND HDMI $20", "LEND HDMI $20 for $3", "LEND HDMI 20/3".

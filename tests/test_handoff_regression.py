@@ -131,3 +131,76 @@ def test_lender_is_told_to_hand_over_on_payment(db, _fake_linq) -> None:
     handle_payment_succeeded(db, _paid(loan.id))
     db.flush()
     assert any(chat == "chat_lender" for chat, _ in _fake_linq.texts)
+
+
+def test_payment_matches_request_id_without_metadata(db, _fake_linq) -> None:
+    loan = _seed(db)
+    loan.linq_payment_request_id = "pr_test"
+    db.commit()
+    handle_payment_succeeded(
+        db,
+        {
+            "event_id": "evt_pay_bare",
+            "event_type": "payment.succeeded",
+            "data": {
+                "id": "pr_test",
+                "stripe": {"payment_intent_id": "pi_bare"},
+            },
+        },
+    )
+    db.flush()
+    assert loan.state == "walking"
+    assert loan.stripe_payment_intent_id == "pi_bare"
+
+
+def test_payment_fetches_intent_when_webhook_omits_it(db, _fake_linq) -> None:
+    loan = _seed(db)
+    loan.linq_payment_request_id = "pr_live"
+    db.commit()
+    _fake_linq.payment_records["pr_live"] = {
+        "id": "pr_live",
+        "status": "succeeded",
+        "stripe": {"payment_intent_id": "pi_fetched"},
+    }
+    handle_payment_succeeded(
+        db,
+        {
+            "event_id": "evt_pay_fetch",
+            "event_type": "payment.succeeded",
+            "data": {"id": "pr_live", "metadata": {"loan_id": loan.id}},
+        },
+    )
+    db.flush()
+    assert loan.state == "walking"
+    assert loan.stripe_payment_intent_id == "pi_fetched"
+
+
+def test_location_failure_does_not_block_paid_texts(db, _fake_linq) -> None:
+    loan = _seed(db)
+    _fake_linq.location_error = RuntimeError("location unavailable")
+    handle_payment_succeeded(db, _paid(loan.id))
+    db.flush()
+    assert loan.state == "walking"
+    assert any("Paid. Meet the lender" in text for _, text in _fake_linq.texts)
+
+
+def test_paid_command_advances_stuck_loan(db, _fake_linq) -> None:
+    loan = _seed(db)
+    loan.linq_payment_request_id = "pr_stuck"
+    db.commit()
+    _fake_linq.payment_records["pr_stuck"] = {
+        "id": "pr_stuck",
+        "status": "succeeded",
+        "stripe": {"payment_intent_id": "pi_stuck"},
+    }
+    handle_inbound(db, _message("PAID", BORROWER, "chat_borrower", "e_paid"))
+    db.flush()
+    assert loan.state == "walking"
+    assert loan.stripe_payment_intent_id == "pi_stuck"
+    assert any("GOT IT" in text for _, text in _fake_linq.texts)
+
+
+def test_awaiting_deposit_unknown_text_prompts_paid(db, _fake_linq) -> None:
+    _seed(db)
+    handle_inbound(db, _message("hello?", BORROWER, "chat_borrower", "e_hi"))
+    assert any("reply PAID" in text for _, text in _fake_linq.texts)
