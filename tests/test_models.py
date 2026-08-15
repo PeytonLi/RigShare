@@ -12,7 +12,14 @@ from app.models import Item, Loan, ProcessedEvent, get_or_create_user, record_ev
 def test_init_db_creates_tables(db) -> None:
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
-    assert tables == {"processed_events", "users", "items", "loans"}
+    assert tables == {
+        "processed_events",
+        "users",
+        "items",
+        "loans",
+        "desk_events",
+        "survey_responses",
+    }
 
 
 def test_record_event_idempotent(db) -> None:

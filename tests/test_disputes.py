@@ -80,7 +80,9 @@ def test_verdict_different_forfeits(db: Session) -> None:
     assert loan.stripe_refund_id is None
 
 
-def test_blocked_cannot_lender_settle_until_verdict(db: Session) -> None:
+def test_blocked_cannot_lender_settle_until_verdict(db: Session, monkeypatch) -> None:
+    monkeypatch.setenv("REQUIRE_CLERK_SETTLE", "false")
+    get_settings.cache_clear()
     loan = _loan(db)
     assert can_lender_settle(loan) is False
     loan.terac_verdict = "fine"

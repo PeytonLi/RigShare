@@ -130,3 +130,14 @@ def test_overdue_sweep_chases_once_and_never_forfeits(db, _fake_linq):
     db.expire_all()
     assert db.get(Loan, loan.id).state == "out"  # a deposit is never kept by a cron
     assert sweep()["chased"] == []  # nagged once, not every tick
+
+
+def test_media_needs_a_signature(client):
+    from app.media import media_url
+
+    assert client.get("/media/mid_1").status_code == 401
+    assert client.get("/media/mid_1?s=nope").status_code == 401
+    # A URL we minted works, and only for that id.
+    signed = media_url("mid_1")
+    assert client.get(signed).status_code == 200
+    assert client.get(signed.replace("mid_1", "mid_2")).status_code == 401

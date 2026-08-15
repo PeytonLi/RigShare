@@ -60,6 +60,17 @@ def _run_local_task(name: str, loan_id: str) -> None:
             from app.inspect import run_open_dispute
 
             run_open_dispute(db, loan_id)
+        elif name == "onTeracSubmission":
+            from app.inspect import run_on_terac_submission
+
+            run_on_terac_submission(db, loan_id)
+        elif name == "settle":
+            from app.clerk import apply_clerk_settle
+            from app.models import Loan
+
+            loan = db.get(Loan, loan_id)
+            if loan is not None and loan.clerk_settle_event_id:
+                apply_clerk_settle(db, loan.id, loan.clerk_settle_event_id)
         elif name == "forfeit":
             from app.disputes import apply_forfeit
             from app.models import Loan

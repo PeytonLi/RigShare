@@ -20,17 +20,55 @@
 
 <section class="section">
   <div class="section-head">
+    <h2>The desks</h2>
+    <span class="sub">no employees · agents run these · Terac is the contractor pool</span>
+  </div>
+  <div class="desks">
+    {% for desk in desks %}
+    <div class="desk">
+      <div class="desk-who">{{ desk.who }}</div>
+      <div class="desk-name">{{ desk.name }}</div>
+      <div class="desk-detail">{{ desk.detail }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-head stack">
     <h2>The company, end to end</h2>
     <span class="sub">every loan walks these stages · a Render Workflow task runs each one</span>
   </div>
   <div class="pipeline">
-    {% for step in pipeline %}
-    <div class="pstep {% if step.active %}active{% elif step.done %}done{% endif %}{% if step.terminal %} terminal{% endif %}">
-      <div class="step-num">{{ '%02d' % loop.index }}</div>
-      <div class="step-name">{{ step.name }}</div>
-      <div class="step-who">{{ step.who }}</div>
+    <ol class="pline">
+      {% set ns = namespace(act='') %}
+      {% for step in pipeline %}
+      {% if step.act != ns.act %}
+      <li class="pline-act">{{ step.act }}</li>
+      {% set ns.act = step.act %}
+      {% endif %}
+      <li class="pstep{% if step.active %} active{% elif step.done %} done{% endif %}{% if step.terminal %} terminal{% endif %}">
+        <span class="step-mark">{{ '%02d' % step.num }}</span>
+        <span class="step-copy">
+          <span class="step-name">{{ step.name }}</span>
+          {% if step.active %}<span class="step-state">now</span>{% endif %}
+        </span>
+        <span class="step-who">{{ step.who }}</span>
+      </li>
+      {% endfor %}
+    </ol>
+    <div class="pipeline-photos">
+      {% for act in pipeline_acts %}
+      <figure>
+        <figcaption>{{ act.photo_label }}</figcaption>
+        {% if act.photo %}
+        <img src="{{ media_url(act.photo) }}" alt="{{ act.photo_label }} photo" />
+        {% else %}
+        <div class="photo-empty">waiting</div>
+        {% endif %}
+      </figure>
+      {% endfor %}
     </div>
-    {% endfor %}
   </div>
 </section>
 
@@ -62,12 +100,30 @@
   <div class="grid loans">
     {% for loan in loans %}
     {% set state = loan.state %}
-    <div class="loan">
+    <a class="loan" href="/loans/{{ loan.id }}">
       <div class="loan-top">
         <span class="badge state-{{ state }}"><span class="dot"></span>{{ state }}</span>
-        <div class="loan-title"><a href="/loans/{{ loan.id }}">{{ loan.title or loan.sku or loan.id[:8] }}</a></div>
+        <div class="loan-title">{{ loan.title or loan.sku or loan.id[:8] }}</div>
       </div>
       <div class="loan-body">
+        <div class="photo-pair compact">
+          <figure>
+            <figcaption>Outbound</figcaption>
+            {% if loan.outbound_media_id %}
+            <img src="{{ media_url(loan.outbound_media_id) }}" alt="outbound photo" />
+            {% else %}
+            <div class="photo-empty">waiting</div>
+            {% endif %}
+          </figure>
+          <figure>
+            <figcaption>Returned</figcaption>
+            {% if loan.return_media_id %}
+            <img src="{{ media_url(loan.return_media_id) }}" alt="return photo" />
+            {% else %}
+            <div class="photo-empty">waiting</div>
+            {% endif %}
+          </figure>
+        </div>
         <div class="moneyline">
           <div class="m hold"><div class="mv">${{ '%.2f' % (loan.deposit_cents / 100) }}</div><div class="ml">hold</div></div>
           <div class="m lender"><div class="mv">${{ '%.2f' % (loan.rental_cents / 100) }}</div><div class="ml">lender</div></div>
@@ -87,9 +143,9 @@
         {% if loan.sandbox_id %}<span class="chip">sandbox</span>{% endif %}
         {% if loan.terac_opportunity_id %}<span class="chip">terac</span>{% endif %}
         {% if loan.compare_metric is not none %}<span class="chip">{{ loan.compare_metric }}px</span>{% endif %}
-        <a class="chip" href="/loans/{{ loan.id }}">open →</a>
+        <span class="chip">open →</span>
       </div>
-    </div>
+    </a>
     {% endfor %}
   </div>
   {% else %}

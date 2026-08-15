@@ -1,6 +1,6 @@
 """Clerk Band agent.
 
-After Condition ALLOW and the lender confirms, POST settle to RigShare. Never call Stripe
+On Condition ALLOW, POST settle immediately. Never wait for the lender. Never call Stripe
 directly; settlement runs server-side on /internal/clerk-settle.
 """
 
@@ -9,12 +9,15 @@ from __future__ import annotations
 import logging
 import os
 
+from agents.tools import clerk_tools
+
 logger = logging.getLogger(__name__)
 
 _CUSTOM_SECTION = """
-You are the RigShare Clerk agent. Wait for Condition ALLOW, then @mention the lender
-human for approval. When the lender confirms, call clerk_settle with the loan_id and
-event_id from the room context. Never call Stripe or refund APIs yourself.
+You are the RigShare Clerk. On Condition ALLOW, immediately call clerk_settle.
+Do not wait for the lender. On BLOCKED, call hire_inspector. After Terac
+fine or damaged, clerk_settle. After Terac different-item, clerk_forfeit.
+Do not invent a fourth agent. Never call Stripe.
 """
 
 
@@ -24,36 +27,6 @@ def _decoder_model(settings) -> str:
         or os.getenv("PIONEER_DECODER_MODEL_ID")
         or "claude-haiku-4-5"
     )
-
-
-def _clerk_tools() -> list:
-    try:
-        from band_sdk.types import tool
-    except ImportError:
-        try:
-            from langchain_core.tools import tool
-        except ImportError:
-            return []
-
-    import httpx
-
-    from app.config import get_settings
-
-    @tool
-    def clerk_settle(loan_id: str, event_id: str) -> str:
-        """POST {PUBLIC_BASE_URL}/internal/clerk-settle after lender approval. Never Stripe."""
-        settings = get_settings()
-        url = f"{settings.public_base_url.rstrip('/')}/internal/clerk-settle"
-        response = httpx.post(
-            url,
-            headers={"X-Internal-Secret": settings.internal_settle_secret},
-            json={"loan_id": loan_id, "event_id": event_id},
-            timeout=30.0,
-        )
-        response.raise_for_status()
-        return f"clerk-settle accepted for loan {loan_id}"
-
-    return [clerk_settle]
 
 
 async def run() -> None:
@@ -79,7 +52,7 @@ async def run() -> None:
         logger.warning("clerk: band-sdk stack not installed; skipping")
         return
 
-    additional_tools = _clerk_tools()
+    additional_tools = clerk_tools()
     llm = ChatOpenAI(
         model=_decoder_model(settings),
         base_url="https://api.pioneer.ai/v1",

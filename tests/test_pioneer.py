@@ -34,6 +34,7 @@ def _settings(mock, **overrides):
         "pioneer_guard_api_key": "",
         "pioneer_ner_api_key": "",
         "pioneer_pii_api_key": "",
+        "pioneer_decoder_model_id": "claude-haiku-4-5",
         "pioneer_guard_model_id": "fastino/gliguard-LLMGuardrails-300M",
         "pioneer_ner_model_id": "fastino/gliner2-large-v1",
         "pioneer_ner_base_model": "fastino/gliner2-large-v1",
@@ -161,3 +162,45 @@ class TestRedact:
         with patch("app.pioneer_client.get_settings") as s:
             _settings(s)
             assert pioneer_client.redact_pii("call 415-990-9839") == "call 415-990-9839"
+
+
+class TestCompose:
+    def test_no_key_returns_fallback(self) -> None:
+        with patch("app.pioneer_client.get_settings") as s:
+            _settings(s, pioneer_api_key="")
+            text, source = pioneer_client.compose_reply("hold", "Holding $20.")
+        assert text == "Holding $20."
+        assert source == "template"
+
+    def test_decoder_success(self) -> None:
+        pioneer_client.set_http(
+            lambda u, h, b: {"choices": [{"message": {"content": "Got it — $20 hold."}}]}
+        )
+        with patch("app.pioneer_client.get_settings") as s:
+            _settings(s)
+            text, source = pioneer_client.compose_reply(
+                "hold", "Holding $20.", {"amount": "$20"}
+            )
+        assert text == "Got it — $20 hold."
+        assert source == "decoder"
+
+    def test_network_error_falls_back(self) -> None:
+        def boom(url, headers, body):
+            raise RuntimeError("down")
+
+        pioneer_client.set_http(boom)
+        with patch("app.pioneer_client.get_settings") as s:
+            _settings(s)
+            text, source = pioneer_client.compose_reply("hold", "Holding $20.")
+        assert text == "Holding $20."
+        assert source == "template"
+
+    def test_empty_content_falls_back(self) -> None:
+        pioneer_client.set_http(
+            lambda u, h, b: {"choices": [{"message": {"content": ""}}]}
+        )
+        with patch("app.pioneer_client.get_settings") as s:
+            _settings(s)
+            text, source = pioneer_client.compose_reply("hold", "Holding $20.")
+        assert text == "Holding $20."
+        assert source == "template"

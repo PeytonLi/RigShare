@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>2 minutes · RigShare</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700&family=Instrument+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <section class="hero" style="padding-top:1rem">
+        <div>
+          <h1>You forgot a cable.</h1>
+          <p class="tagline">
+            Three taps. What you have actually needed, which text you would reply to,
+            and whether a $2 fee on a $25 hold feels fair.
+          </p>
+        </div>
+      </section>
+
+      {% if error %}
+      <p class="survey-error">{{ error }}</p>
+      {% endif %}
+
+      <form method="post" action="/survey" class="survey">
+        <input type="hidden" name="submission_id" value="{{ submission_id }}" />
+        <input type="hidden" name="task_id" value="{{ task_id }}" />
+
+        <fieldset class="survey-block">
+          <legend>At a hackathon or conference, which have you actually needed to borrow?</legend>
+          <p class="tagline">Pick every one that is true. None is fine.</p>
+          <div class="choice-grid">
+            {% for label in catalog_labels %}
+            <label class="choice">
+              <input type="checkbox" name="catalog" value="{{ label }}" />
+              <span>{{ label }}</span>
+            </label>
+            {% endfor %}
+          </div>
+        </fieldset>
+
+        <fieldset class="survey-block">
+          <legend>Which opening text would you actually reply to?</legend>
+          <div class="choice-grid">
+            {% for key, copy in pitches %}
+            <label class="choice choice-wide">
+              <input type="radio" name="pitch" value="{{ key }}" />
+              <span><strong>Pitch {{ key|upper }}.</strong> {{ copy }}</span>
+            </label>
+            {% endfor %}
+          </div>
+        </fieldset>
+
+        <fieldset class="survey-block">
+          <legend>$25 hold. $5 to the owner. $2 to the bot. $18 back.</legend>
+          <p class="tagline">Does that fee feel fair, greedy, or confusing?</p>
+          <div class="choice-grid three">
+            {% for key, copy in fees %}
+            <label class="choice">
+              <input type="radio" name="fee" value="{{ key }}" />
+              <span>{{ copy }}</span>
+            </label>
+            {% endfor %}
+          </div>
+        </fieldset>
+
+        <button class="btn primary" type="submit">Submit</button>
+      </form>
+    </main>
+  </body>
+</html>

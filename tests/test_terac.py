@@ -8,6 +8,7 @@ from app.terac_client import (
     FakeTerac,
     approve_submission,
     launch_catalog_survey,
+    launch_company_survey,
     list_submissions,
     open_dispute,
     set_terac_gateway,
@@ -80,3 +81,29 @@ def test_no_api_key_returns_none_and_never_raises(monkeypatch: pytest.MonkeyPatc
     assert list_submissions("opp_1") == []
     assert approve_submission("sub_1") is None
     assert launch_catalog_survey("q", ["a"]) is None
+    assert launch_company_survey() is None
+
+
+def test_company_survey_uses_gateway(fake: FakeTerac) -> None:
+    opportunity_id = launch_company_survey()
+    assert opportunity_id is not None
+    assert fake.opportunities[0]["question"] == "You forgot a cable."
+
+
+def test_company_survey_live_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TERAC_API_KEY", "terac-key")
+    monkeypatch.setenv("TERAC_PROJECT_ID", "proj_1")
+    get_settings.cache_clear()
+    calls: list[tuple[str, str, dict | None]] = []
+
+    def fake_request(method: str, path: str, payload: dict | None = None) -> dict:
+        calls.append((method, path, payload))
+        return {"id": "opp_co"}
+
+    monkeypatch.setattr(terac_client, "_request", fake_request)
+    assert launch_company_survey() == "opp_co"
+    body = calls[0][2] or {}
+    assert body["num_participants"] == 10
+    assert body["tasks"][0]["duration_minutes"] == 3
+    assert body["tasks"][0]["review_type"] == "manual_review"
+    assert body["tasks"][0]["task_url"].endswith("/survey")

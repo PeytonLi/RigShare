@@ -12,11 +12,14 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
+from app.media import media_url
 from app.models import Item, Loan, utcnow
 
 router = APIRouter()
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+# The Terac inspector has no login, so their photos come in on a signed URL.
+TEMPLATES.env.globals["media_url"] = media_url
 
 VERDICTS = {"fine", "damaged", "different"}
 

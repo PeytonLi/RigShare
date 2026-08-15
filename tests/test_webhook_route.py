@@ -85,7 +85,24 @@ def test_lend_need_pay_settle_loop(client, db, _fake_linq):
     assert client.post("/webhooks/linq", content=body, headers=sign_linq_body(body, event_id="evt_need")).status_code == 200
     db.expire_all()
     loan = db.execute(select(Loan)).scalar_one()
+    item = db.execute(select(Item)).scalar_one()
+    assert loan.state == "matching"
+    assert item.status == "listed"
+    assert any("Looking for a hdmi nearby" in text for _, text in _fake_linq.texts)
+    assert not _fake_linq.links
+
+    picked = client.post(
+        "/internal/pick-item",
+        headers={"X-Internal-Secret": "test-settle"},
+        json={"loan_id": loan.id, "item_id": item.id, "event_id": "evt_pick"},
+    )
+    assert picked.status_code == 200
+    db.expire_all()
+    loan = db.get(Loan, loan.id)
+    item = db.get(Item, item.id)
     assert loan.state == "awaiting_deposit"
+    assert item.status == "reserved"
+    assert loan.matcher_source == "agent"
     assert _fake_linq.links[-1][1] == "https://zero.linqapp.com/pay/test"
     assert any("$15 hold" in text for _, text in _fake_linq.texts)
 
@@ -138,11 +155,24 @@ def test_lend_need_pay_settle_loop(client, db, _fake_linq):
     assert client.post("/webhooks/linq", content=body, headers=sign_linq_body(body, event_id="evt_settle")).status_code == 200
     db.expire_all()
     loan = db.get(Loan, loan.id)
+    assert loan.state == "out" or loan.state == "returning"
+    assert loan.stripe_refund_id is None
+    assert any("Clerk has to SETTLE" in text for _, text in _fake_linq.texts)
+
+    ok = client.post(
+        "/internal/clerk-settle",
+        headers={"X-Internal-Secret": "test-settle"},
+        json={"loan_id": loan.id, "event_id": "evt_clerk"},
+    )
+    assert ok.status_code == 200
+    db.expire_all()
+    loan = db.get(Loan, loan.id)
     assert loan.state == "closed"
     assert loan.stripe_refund_id == "re_test"
     page = client.get(f"/loans/{loan.id}")
     assert page.status_code == 200
     assert b"closed" in page.content
+    assert b"Agents" in page.content
 
 
 def test_clerk_settle_endpoint(client, db):

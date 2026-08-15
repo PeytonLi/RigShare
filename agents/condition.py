@@ -9,13 +9,16 @@ from __future__ import annotations
 import logging
 import os
 
+from agents.tools import condition_tools
+
 logger = logging.getLogger(__name__)
 
 _CUSTOM_SECTION = """
 You are the RigShare Condition agent. Inspect return photo URLs and sandbox metric
-evidence in the loan room. Reply ALLOW when the returned item matches what went out;
-reply BLOCKED when evidence shows the wrong item or significant damage. Never initiate
-refunds, settlements, or Stripe actions.
+evidence in the loan room. ImageMagick AE is evidence, not a decision. Call
+post_condition_verdict with verdict ALLOW when the returned item matches what went
+out, or BLOCKED when evidence shows the wrong item, missing orange tape, or
+significant damage. Never refund. Never hire Terac. Never call Stripe.
 """
 
 
@@ -50,6 +53,7 @@ async def run() -> None:
         logger.warning("condition: band-sdk stack not installed; skipping")
         return
 
+    additional_tools = condition_tools()
     llm = ChatOpenAI(
         model=_decoder_model(settings),
         base_url="https://api.pioneer.ai/v1",
@@ -59,6 +63,7 @@ async def run() -> None:
         llm=llm,
         checkpointer=InMemorySaver(),
         custom_section=_CUSTOM_SECTION,
+        additional_tools=additional_tools or None,
     )
     agent = Agent.create(
         adapter=adapter,

@@ -199,52 +199,14 @@ def openDispute(loan_id: str) -> dict:
 
 @app.task
 def onTeracSubmission(loan_id: str) -> dict:
-    """Poll the dispute opportunity, pay the expert, tell Clerk the verdict.
-
-    The verdict itself is written by the /disputes page the inspector tapped. This
-    task is what proves a human was hired: it approves the submission so Terac
-    releases their credits, and unsticks the loan.
-    """
-    from app.band_client import post_room_message
-    from app.config import get_settings
-    from app.models import Loan
-    from app.terac_client import approve_submission, list_submissions
+    """Poll the dispute opportunity, pay the expert, tell Clerk the verdict."""
+    from app.inspect import run_on_terac_submission
 
     db = _session()
     try:
-        loan = db.get(Loan, loan_id)
-        if loan is None:
-            return {"ok": False, "error": "loan not found"}
-        if not loan.terac_opportunity_id:
-            return {"ok": False, "error": "no terac opportunity", "loan_id": loan_id}
-
-        if not loan.terac_submission_id:
-            submissions = list_submissions(loan.terac_opportunity_id)
-            if not submissions:
-                return {"ok": True, "pending": True, "loan_id": loan_id}
-            submission_id = str(submissions[0].get("id") or "")
-            if submission_id:
-                loan.terac_submission_id = submission_id
-                approve_submission(submission_id)
-                db.commit()
-
-        if loan.band_room_id:
-            post_room_message(
-                loan.band_room_id,
-                f"Terac inspector verdict for loan_id={loan.id}: "
-                f"{loan.terac_verdict or 'submitted, no verdict recorded'}. "
-                f"submission={loan.terac_submission_id}. Clerk: SETTLE or FORFEIT.",
-                mention_agent_id=get_settings().band_clerk_agent_id or None,
-                mention_handle="Clerk",
-            )
-        return {
-            "ok": True,
-            "task": "onTeracSubmission",
-            "loan_id": loan_id,
-            "submission_id": loan.terac_submission_id,
-            "verdict": loan.terac_verdict,
-            "forfeit": loan.forfeited_at is not None,
-        }
+        result = run_on_terac_submission(db, loan_id)
+        db.commit()
+        return result
     except Exception:
         db.rollback()
         raise

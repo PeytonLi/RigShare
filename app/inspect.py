@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from sqlalchemy.orm import Session
 
+from app.agent_api import listed_candidates, pick_item
 from app.band_client import create_loan_room, post_room_message
+from app.catalog import load_weights
 from app.config import get_settings
 from app.disputes import dispute_url
-from app.linq_client import send_text
 from app.models import Item, Loan
 from app.superserve_client import inspect_outbound, inspect_return, is_blocked
-from app.terac_client import open_dispute
+from app.terac_client import approve_submission, list_submissions, open_dispute
 
 log = logging.getLogger("rigshare")
 
@@ -42,17 +44,42 @@ def run_quote_and_charge(session: Session, loan_id: str) -> dict:
     if loan is None:
         return {"ok": False, "error": "loan not found"}
     item = session.get(Item, loan.item_id)
+    sku = item.sku if item is not None else "item"
     ensure_loan_room(session, loan)
     ensure_sandbox(session, loan)
+    candidates = listed_candidates(session, sku) if item is not None else []
+    if item is not None and item.status == "listed" and item not in candidates:
+        candidates = [item, *candidates]
     if loan.band_room_id:
-        sku = item.sku if item is not None else "item"
+        lines = [
+            f"Borrower needs {sku}. loan_id={loan.id}. Call pick_item.",
+            f"catalog_weights={load_weights()}",
+        ]
+        for cand in candidates:
+            lines.append(f"- item_id={cand.id} sku={cand.sku} title={cand.title}")
         post_room_message(
             loan.band_room_id,
-            f"Borrower needs {sku}. loan_id={loan.id}. Pick the listed item.",
+            "\n".join(lines),
             mention_agent_id=get_settings().band_matcher_agent_id or None,
             mention_handle="Matcher",
         )
-    return {"ok": True, "task": "quoteAndCharge", "loan_id": loan_id, "room": loan.band_room_id}
+    wait = max(0, int(get_settings().matcher_wait_seconds))
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        session.refresh(loan)
+        if loan.matched_at:
+            break
+        time.sleep(0.25)
+    if loan.state == "matching" and not loan.matched_at:
+        pick_id = candidates[0].id if candidates else loan.item_id
+        pick_item(session, loan.id, pick_id, event_id=f"timeout-{loan.id}", source="timeout")
+    return {
+        "ok": True,
+        "task": "quoteAndCharge",
+        "loan_id": loan_id,
+        "room": loan.band_room_id,
+        "matcher_source": loan.matcher_source,
+    }
 
 
 def run_inspect_return(session: Session, loan_id: str) -> dict:
@@ -70,39 +97,30 @@ def run_inspect_return(session: Session, loan_id: str) -> dict:
         loan.compare_metric = metric
 
     settings = get_settings()
-    if is_blocked(metric):
-        loan.state = "blocked"
-        if loan.borrower_chat_id:
-            send_text(
-                loan.borrower_chat_id,
-                "Return doesn't match the outbound photo (missing orange tape). "
-                "Deposit stays held. Lender is looking at it.",
-            )
-        if loan.band_room_id:
-            post_room_message(
-                loan.band_room_id,
-                f"BLOCKED loan_id={loan.id} compare_metric={metric}. Tape missing or wrong item?",
-                mention_agent_id=settings.band_condition_agent_id or None,
-                mention_handle="Condition",
-            )
-        run_open_dispute(session, loan.id)
-        return {"ok": True, "blocked": True, "metric": metric, "loan_id": loan_id}
-
-    loan.state = "returning"
-    if loan.lender_chat_id:
-        send_text(
-            loan.lender_chat_id,
-            f"Return photo in. Metric {metric if metric is not None else 'n/a'}. "
-            f"Reply SETTLE {loan.id} if the orange tape matches.",
-        )
+    recommended = "BLOCKED" if is_blocked(metric) else "ALLOW"
     if loan.band_room_id:
+        from app.config import get_settings as _gs
+
+        base = _gs().public_base_url.rstrip("/")
+        out_url = ""
+        item = session.get(Item, loan.item_id)
+        if item is not None and item.outbound_media_id:
+            out_url = f"{base}/media/{item.outbound_media_id}"
+        ret_url = f"{base}/media/{loan.return_media_id}" if loan.return_media_id else ""
         post_room_message(
             loan.band_room_id,
-            f"ALLOW recommended loan_id={loan.id} compare_metric={metric}. Confirm then Clerk SETTLE.",
+            f"Inspect loan_id={loan.id} compare_metric={metric} recommended={recommended}. "
+            f"outbound={out_url} return={ret_url}. Call post_condition_verdict ALLOW or BLOCKED.",
             mention_agent_id=settings.band_condition_agent_id or None,
             mention_handle="Condition",
         )
-    return {"ok": True, "blocked": False, "metric": metric, "loan_id": loan_id}
+    return {
+        "ok": True,
+        "blocked": False,
+        "recommended": recommended,
+        "metric": metric,
+        "loan_id": loan_id,
+    }
 
 
 def run_open_dispute(session: Session, loan_id: str) -> dict:
@@ -127,4 +145,40 @@ def run_open_dispute(session: Session, loan_id: str) -> dict:
         "loan_id": loan_id,
         "opportunity_id": loan.terac_opportunity_id,
         "url": url,
+    }
+
+
+def run_on_terac_submission(session: Session, loan_id: str) -> dict:
+    loan = session.get(Loan, loan_id)
+    if loan is None:
+        return {"ok": False, "error": "loan not found"}
+    if not loan.terac_opportunity_id:
+        return {"ok": False, "error": "no terac opportunity", "loan_id": loan_id}
+
+    if not loan.terac_submission_id:
+        submissions = list_submissions(loan.terac_opportunity_id)
+        if not submissions:
+            return {"ok": True, "pending": True, "loan_id": loan_id}
+        submission_id = str(submissions[0].get("id") or "")
+        if submission_id:
+            loan.terac_submission_id = submission_id
+            approve_submission(submission_id)
+            session.flush()
+
+    if loan.band_room_id:
+        post_room_message(
+            loan.band_room_id,
+            f"Terac inspector verdict for loan_id={loan.id}: "
+            f"{loan.terac_verdict or 'submitted, no verdict recorded'}. "
+            f"submission={loan.terac_submission_id}. Clerk: SETTLE or FORFEIT.",
+            mention_agent_id=get_settings().band_clerk_agent_id or None,
+            mention_handle="Clerk",
+        )
+    return {
+        "ok": True,
+        "task": "onTeracSubmission",
+        "loan_id": loan_id,
+        "submission_id": loan.terac_submission_id,
+        "verdict": loan.terac_verdict,
+        "forfeit": loan.forfeited_at is not None,
     }

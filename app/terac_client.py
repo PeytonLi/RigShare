@@ -191,3 +191,51 @@ def launch_catalog_survey(question: str, options: list[str]) -> str | None:
     except Exception:
         log.exception("Terac launch_catalog_survey failed")
         return None
+
+
+COMPANY_PARTICIPANTS = 10
+COMPANY_MINUTES = 3
+
+
+def launch_company_survey() -> str | None:
+    """Growth + Product + Counsel: catalog, pitch, fee. Hosted at /survey.
+
+    Creates and launches. Do not call until PUBLIC_BASE_URL/survey is reachable.
+    """
+    if _gateway is not None:
+        return _gateway.launch_catalog_survey(
+            "You forgot a cable.",
+            ["USB-C charger", "Lightning", "HDMI", "dongle", "clicker", "none"],
+        )
+    if not get_settings().terac_api_key:
+        log.warning("TERAC_API_KEY not set; skipping company survey")
+        return None
+    try:
+        return _create_and_launch(
+            {
+                "project_id": _dispute_project_id(),
+                "title": "RigShare: what would you borrow, and is the fee fair?",
+                "business_type": "b2c",
+                "moderated": False,
+                "unrestricted_audience": True,
+                "num_participants": COMPANY_PARTICIPANTS,
+                "tasks": [
+                    {
+                        "sequence": 1,
+                        "task_type": "activity",
+                        "review_type": "manual_review",
+                        "title": "Three taps: catalog, pitch, fee",
+                        "description": (
+                            "What you have actually needed to borrow at an event, "
+                            "which opening text you would reply to, and whether "
+                            "a $2 fee on a $25 hold feels fair."
+                        ),
+                        "task_url": f"{get_settings().public_base_url.rstrip('/')}/survey",
+                        "duration_minutes": COMPANY_MINUTES,
+                    }
+                ],
+            }
+        )
+    except Exception:
+        log.exception("Terac launch_company_survey failed")
+        return None

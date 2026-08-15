@@ -7,9 +7,12 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.clerk import can_lender_settle, settle_loan
+from app.agent_api import listed_candidates, persist_entities
+from app.clerk import settle_loan
 from app.commands import CommandKind, parse_command
 from app.config import get_settings
+from app.counsel import review_listing
+from app.desks import record_desk
 from app.ingest import enrich_command
 from app.linq_client import (
     create_payment_request,
@@ -19,6 +22,8 @@ from app.linq_client import (
     send_link,
     send_text,
 )
+from app.product import borrower_quote, live_reply
+from app.pioneer_client import compose_reply
 from app.workflows_client import start_task
 from app.linq_webhook import (
     event_id,
@@ -29,9 +34,7 @@ from app.linq_webhook import (
     inbound_text,
 )
 from app.models import Item, Loan, get_or_create_user
-from app.money import PriceRejected, quote, refund_cents
-from app.skus import SKUS, prohibited_item, resolve_sku
-from app.stripe_client import refund_payment_intent
+from app.skus import SKUS, resolve_sku
 
 log = logging.getLogger("rigshare")
 
@@ -56,6 +59,13 @@ def _dollars(cents: int) -> str:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _say(chat_id: str, fallback: str, template_key: str, slots: dict | None = None, loan: Loan | None = None) -> None:
+    text, source = compose_reply(template_key, fallback, slots)
+    send_text(chat_id, text)
+    if loan is not None:
+        loan.copy_source = source
 
 
 def handle_linq_event(session: Session, event: dict) -> None:
@@ -121,29 +131,23 @@ def handle_inbound(session: Session, event: dict) -> None:
     is_lender = phone == settings.lender_phone
 
     if cmd.kind == CommandKind.LEND:
-        banned = prohibited_item(text)
-        if banned is not None:
-            # PRD 4.5: we are holding a stranger's deposit, not running insurance.
-            send_text(
-                chat_id,
-                f"We can't hold a {banned}. RigShare is for cheap gear people forget. Not that.",
-            )
-            return
         sku = cmd.sku or resolve_sku(text)
+        decision = review_listing(
+            text,
+            sku,
+            demo=settings.demo_mode and cmd.deposit_cents is None,
+            deposit_cents=cmd.deposit_cents,
+            rental_cents=cmd.rental_cents,
+        )
+        if not decision.allowed:
+            send_text(chat_id, decision.message)
+            record_desk(session, "counsel", decision.message)
+            return
         if sku is None:
             send_text(chat_id, "What are you lending? Reply LEND HDMI, LEND USB-C, or LEND LIGHTNING. Orange tape on it.")
             return
-        try:
-            money = quote(
-                sku,
-                # Their own number always wins over the SKU table, demo or not.
-                demo=settings.demo_mode and cmd.deposit_cents is None,
-                deposit_cents=cmd.deposit_cents,
-                rental_cents=cmd.rental_cents,
-            )
-        except PriceRejected as exc:
-            send_text(chat_id, str(exc))
-            return
+        money = decision.money
+        assert money is not None
         item = Item(
             id=uuid.uuid4().hex,
             sku=sku,
@@ -159,12 +163,19 @@ def handle_inbound(session: Session, event: dict) -> None:
         )
         session.add(item)
         session.flush()
-        send_text(
+        _say(
             chat_id,
             f"Got it. {item.title}, orange tape. {_dollars(money.deposit_cents)} hold. "
             f"You get {_dollars(money.rental_cents)} when it comes back. "
             f"Borrower also pays a {_dollars(money.platform_fee_cents)} RigShare fee (not taken from you). "
             "Reply YES to list it. Mark the item so we can tell it apart.",
+            "lend_confirm",
+            {
+                "title": item.title,
+                "deposit": _dollars(money.deposit_cents),
+                "rental": _dollars(money.rental_cents),
+                "fee": _dollars(money.platform_fee_cents),
+            },
         )
         return
 
@@ -191,9 +202,8 @@ def handle_inbound(session: Session, event: dict) -> None:
         if sku is None:
             send_text(chat_id, "What do you need? NEED HDMI, NEED USB-C, or NEED LIGHTNING.")
             return
-        item = session.execute(
-            select(Item).where(Item.sku == sku, Item.status == "listed")
-        ).scalars().first()
+        candidates = listed_candidates(session, sku)
+        item = candidates[0] if candidates else None
         if item is None:
             send_text(chat_id, f"Nothing listed for {sku.replace('_', ' ')} yet. Ask someone to LEND.")
             return
@@ -202,36 +212,23 @@ def handle_inbound(session: Session, event: dict) -> None:
             item_id=item.id,
             borrower_user_id=user.id,
             lender_user_id=item.lender_user_id,
-            state="awaiting_deposit",
+            state="matching",
             borrower_chat_id=chat_id,
             lender_chat_id=item.lender_chat_id,
             deposit_cents=item.deposit_cents,
             rental_cents=item.rental_cents,
             platform_fee_cents=item.platform_fee_cents,
         )
-        item.status = "reserved"
         session.add(loan)
+        persist_entities(loan, cmd.entities)
         session.flush()
-        pay = create_payment_request(
-            item.deposit_cents,
-            f"RigShare hold {sku}",
-            {"loan_id": loan.id},
-        )
-        loan.linq_payment_request_id = pay.id
-        refund = refund_cents(item.deposit_cents, item.rental_cents, item.platform_fee_cents)
-        send_text(
+        label = sku.replace("_", " ")
+        _say(
             chat_id,
-            f"{item.title} nearby, marked with orange tape. "
-            f"{_dollars(item.deposit_cents)} hold now. "
-            f"{_dollars(item.rental_cents)} to the lender if you bring it back. "
-            f"{_dollars(item.platform_fee_cents)} RigShare fee. "
-            f"{_dollars(refund)} refunded.",
-        )
-        send_link(chat_id, pay.checkout_url)
-        send_text(
-            chat_id,
-            "Pay that link. I'll text next steps when it clears. "
-            "If I don't, reply PAID.",
+            f"Looking for a {label} nearby…",
+            "need_matching",
+            {"sku": label, "loan_id": loan.id},
+            loan,
         )
         start_task("quoteAndCharge", loan.id)
         return
@@ -283,9 +280,12 @@ def handle_inbound(session: Session, event: dict) -> None:
         loan.state = "returning"
         if media:
             loan.return_media_id = media[0]
-        send_text(
+        _say(
             chat_id,
-            f"Return photo in. Lender: reply SETTLE {loan.id} if it matches (orange tape).",
+            "Return photo in. Condition is looking at the orange tape.",
+            "returning",
+            {"loan_id": loan.id},
+            loan,
         )
         start_task("inspectReturn", loan.id)
         return
@@ -302,11 +302,10 @@ def handle_inbound(session: Session, event: dict) -> None:
         if loan is None:
             send_text(chat_id, "No loan to settle.")
             return
-        if not can_lender_settle(loan):
-            send_text(chat_id, "Clerk has to SETTLE this one in Band first.")
+        if loan.stripe_refund_id:
+            send_text(chat_id, f"Already refunded {loan.stripe_refund_id}.")
             return
-        _settle(session, loan, chat_id)
-        start_task("settle", loan.id)
+        send_text(chat_id, "Clerk has to SETTLE this one in Band first.")
         return
 
     if cmd.kind == CommandKind.CANCEL:
@@ -327,7 +326,7 @@ def handle_inbound(session: Session, event: dict) -> None:
             return
         send_text(chat_id, "If you already paid, reply PAID. If not, use the pay link I sent.")
         return
-    send_text(chat_id, LIVE_REPLY)
+    send_text(chat_id, live_reply())
 
 
 _PAID_STATUSES = {

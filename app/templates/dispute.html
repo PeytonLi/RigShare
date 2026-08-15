@@ -20,14 +20,14 @@
       <figure>
         <figcaption>Outbound</figcaption>
         {% if item and item.outbound_media_id %}
-        <img src="/media/{{ item.outbound_media_id }}" alt="outbound photo" />
-        {% else %}<p class="tagline">no outbound photo</p>{% endif %}
+        <img src="{{ media_url(item.outbound_media_id) }}" alt="outbound photo" />
+        {% else %}<div class="photo-empty">waiting</div>{% endif %}
       </figure>
       <figure>
         <figcaption>Returned</figcaption>
         {% if loan.return_media_id %}
-        <img src="/media/{{ loan.return_media_id }}" alt="return photo" />
-        {% else %}<p class="tagline">no return photo</p>{% endif %}
+        <img src="{{ media_url(loan.return_media_id) }}" alt="return photo" />
+        {% else %}<div class="photo-empty">waiting</div>{% endif %}
       </figure>
     </div>
     <p class="tagline" style="margin-top:0.9rem">

@@ -43,12 +43,17 @@ def set_http(
     _post = fn
 
 
-def _do_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[str, Any]:
+def _do_post(
+    url: str,
+    headers: dict[str, str],
+    body: dict[str, Any],
+    timeout: float = 20.0,
+) -> dict[str, Any]:
     if _post is not None:
         return _post(url, headers, body)
     import httpx
 
-    response = httpx.post(url, headers=headers, json=body, timeout=20.0)
+    response = httpx.post(url, headers=headers, json=body, timeout=timeout)
     response.raise_for_status()
     return response.json()
 
@@ -145,3 +150,49 @@ def redact_pii(text: str) -> str:
     for start, end in sorted(spans, reverse=True):
         result = result[:start] + "[redacted]" + result[end:]
     return result
+
+
+_DECODER_SYSTEM = (
+    "Write one iMessage. No markdown. Keep every dollar amount exactly as given. "
+    "One or two short sentences."
+)
+
+
+def compose_reply(
+    template_key: str, fallback: str, slots: dict | None = None
+) -> tuple[str, str]:
+    """Rewrite a canned iMessage via the Pioneer decoder. Never raises.
+
+    Returns `(text, source)` where source is `"decoder"` or `"template"`.
+    """
+    settings = get_settings()
+    if not settings.pioneer_api_key:
+        return fallback, "template"
+
+    headers = {
+        "Authorization": f"Bearer {settings.pioneer_api_key}",
+        "Content-Type": "application/json",
+    }
+    user_content = (
+        f"{template_key}\n{json.dumps(slots or {})}\n{fallback}"
+    )
+    body: dict[str, Any] = {
+        "model": settings.pioneer_decoder_model_id,
+        "messages": [
+            {"role": "system", "content": _DECODER_SYSTEM},
+            {"role": "user", "content": user_content},
+        ],
+    }
+    try:
+        envelope = _do_post(PIONEER_URL, headers, body, timeout=8.0)
+        content = envelope["choices"][0]["message"]["content"]
+    except Exception:
+        log.warning("pioneer decoder failed", exc_info=True)
+        return fallback, "template"
+
+    if not isinstance(content, str):
+        return fallback, "template"
+    text = content.strip()
+    if not text:
+        return fallback, "template"
+    return text, "decoder"

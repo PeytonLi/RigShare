@@ -99,6 +99,26 @@ class Loan(Base):
     )
 
 
+class SurveyResponse(Base):
+    __tablename__ = "survey_responses"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    terac_submission_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    catalog_json: Mapped[str] = mapped_column(Text, nullable=False)
+    pitch: Mapped[str] = mapped_column(String, nullable=False)
+    fee_tone: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class DeskEvent(Base):
+    __tablename__ = "desk_events"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    desk: Mapped[str] = mapped_column(String, nullable=False)
+    detail: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 def get_or_create_user(session: Session, phone: str) -> User:
     user = session.execute(select(User).where(User.phone == phone)).scalar_one_or_none()
     if user is not None:

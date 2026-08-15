@@ -52,8 +52,9 @@ def test_yes_lists_it_and_then_it_is_borrowable(db, _fake_linq):
     handle_inbound(db, _message("NEED HDMI", BORROWER, "chat_borrower", "e_need"))
     db.flush()
     loan = db.execute(select(Loan)).scalars().one()
-    assert loan.state == "awaiting_deposit"
-    assert db.execute(select(Item)).scalars().one().status == "reserved"
+    assert loan.state == "matching"
+    assert db.execute(select(Item)).scalars().one().status == "listed"
+    assert any("Looking for a hdmi nearby" in text for _, text in _fake_linq.texts)
 
 
 def test_yes_with_nothing_pending_says_so(db, _fake_linq):

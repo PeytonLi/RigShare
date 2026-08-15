@@ -54,11 +54,13 @@ def test_inspect_allow_small_metric(db: Session, _fake_linq) -> None:
         set_superserve_gateway(None)
 
     assert result["blocked"] is False
+    assert result["recommended"] == "ALLOW"
     db.refresh(loan)
-    assert loan.state == "returning"
+    assert loan.state == "inspecting"
     assert loan.compare_metric == 100
     assert loan.sandbox_id == f"sbx_{loan.id}"
-    assert any("SETTLE" in text for _, text in _fake_linq.texts)
+    assert loan.terac_opportunity_id is None
+    assert not any("SETTLE" in text for _, text in _fake_linq.texts)
 
 
 def test_inspect_blocks_huge_metric(db: Session, _fake_linq) -> None:
@@ -74,13 +76,13 @@ def test_inspect_blocks_huge_metric(db: Session, _fake_linq) -> None:
         set_superserve_gateway(None)
         set_terac_gateway(None)
 
-    assert result["blocked"] is True
+    assert result["blocked"] is False
+    assert result["recommended"] == "BLOCKED"
     db.refresh(loan)
-    assert loan.state == "blocked"
+    assert loan.state == "inspecting"
     assert loan.compare_metric == BLOCK_METRIC + 1
-    assert loan.dispute_token
-    assert loan.terac_opportunity_id == f"opp_{loan.id}"
-    assert any("doesn't match" in text for _, text in _fake_linq.texts)
+    assert loan.terac_opportunity_id is None
+    assert not any("doesn't match" in text for _, text in _fake_linq.texts)
 
 
 def test_inspect_skips_without_sandbox(db: Session) -> None:
@@ -89,8 +91,9 @@ def test_inspect_skips_without_sandbox(db: Session) -> None:
     result = run_inspect_return(db, loan.id)
     db.commit()
     assert result["blocked"] is False
+    assert result["recommended"] == "ALLOW"
     db.refresh(loan)
-    assert loan.state == "returning"
+    assert loan.state == "inspecting"
     assert loan.compare_metric is None
 
 
