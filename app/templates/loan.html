@@ -1,35 +1,106 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Loan {{ loan.id[:8] }}</title>
-    <style>
-      body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 2rem; max-width: 52rem; }
-      dt { font-weight: 600; }
-      dd { margin: 0 0 0.75rem 0; }
-    </style>
-  </head>
-  <body>
-    <p><a href="/">RigShare</a></p>
-    <h1>Loan {{ loan.id[:8] }}</h1>
-    <dl>
-      <dt>state</dt><dd>{{ loan.state }}</dd>
-      <dt>item</dt><dd>{{ item.sku if item else loan.item_id }}</dd>
-      <dt>deposit / rental / fee</dt>
-      <dd>{{ loan.deposit_cents }} / {{ loan.rental_cents }} / {{ loan.platform_fee_cents }}</dd>
-      <dt>linq payment request</dt><dd>{{ loan.linq_payment_request_id }}</dd>
-      <dt>stripe payment intent</dt><dd>{{ loan.stripe_payment_intent_id }}</dd>
-      <dt>stripe refund</dt><dd>{{ loan.stripe_refund_id }}</dd>
-      <dt>borrower chat</dt><dd>{{ loan.borrower_chat_id }}</dd>
-      <dt>lender chat</dt><dd>{{ loan.lender_chat_id }}</dd>
-      <dt>clerk settle</dt><dd>{{ loan.clerk_settle_event_id }}</dd>
-      <dt>band room</dt><dd>{{ loan.band_room_id }}</dd>
-      <dt>sandbox</dt><dd>{{ loan.sandbox_id }}</dd>
-      <dt>compare metric</dt><dd>{{ loan.compare_metric }}</dd>
-      <dt>terac opportunity</dt><dd>{{ loan.terac_opportunity_id }}</dd>
-      <dt>terac verdict</dt><dd>{{ loan.terac_verdict }}</dd>
-      <dt>return media</dt><dd>{{ loan.return_media_id }}</dd>
-    </dl>
-  </body>
-</html>
+{% extends "base.html" %}
+
+{% block title %}Loan {{ loan.id[:8] }} · RigShare{% endblock %}
+
+{% block content %}
+<section class="hero" style="padding-top:1rem">
+  <div>
+    <h1>Loan <span class="mono">{{ loan.id[:8] }}</span></h1>
+    <p class="tagline">
+      <span class="badge state-{{ loan.state }}"><span class="dot"></span>{{ loan.state }}</span>
+      &nbsp;{{ item.title or (item.sku if item else '') }} &middot; {{ loan.deposit_cents }}&cent; hold
+    </p>
+  </div>
+  <div class="lede">
+    borrower chat: <span class="mono">{{ (loan.borrower_chat_id or '—')[:12] }}</span><br />
+    lender chat: <span class="mono">{{ (loan.lender_chat_id or '—')[:12] }}</span>
+  </div>
+</section>
+
+<div class="detail-grid">
+  <div style="display:grid;gap:1.2rem">
+    <section class="section" style="margin-top:0">
+      <div class="section-head"><h2>Money path</h2><span class="sub">hold &rarr; lender &rarr; fee &rarr; refund</span></div>
+      <div class="moneyline" style="margin-bottom:1rem">
+        <div class="m hold"><div class="mv">${{ '%.2f' % (loan.deposit_cents / 100) }}</div><div class="ml">hold charged</div></div>
+        <div class="m lender"><div class="mv">${{ '%.2f' % (loan.rental_cents / 100) }}</div><div class="ml">lender</div></div>
+        <div class="m fee"><div class="mv">${{ '%.2f' % (loan.platform_fee_cents / 100) }}</div><div class="ml">rigshare fee</div></div>
+        <div class="m refund"><div class="mv">${{ '%.2f' % (refund_cents / 100) }}</div><div class="ml">refunded</div></div>
+      </div>
+      <div class="kvs">
+        <div class="kv"><span class="k">linq payment request</span><span class="v full">{{ loan.linq_payment_request_id or '—' }}</span></div>
+        <div class="kv"><span class="k">stripe payment intent</span><span class="v full">{{ loan.stripe_payment_intent_id or '—' }}</span></div>
+        <div class="kv"><span class="k">stripe refund</span><span class="v full">{{ loan.stripe_refund_id or '—' }}</span></div>
+        <div class="kv"><span class="k">manual refund</span><span class="v full">{{ loan.manual_refund_cents if loan.manual_refund_cents is not none else '—' }}</span></div>
+        <div class="kv"><span class="k">lender owed</span><span class="v full">
+          {%- if loan.lender_payout_cents is none %}—
+          {%- elif loan.lender_paid_at %}${{ '%.2f' % (loan.lender_payout_cents / 100) }} · settled (we are the lender)
+          {%- else %}${{ '%.2f' % (loan.lender_payout_cents / 100) }} · unpaid — Venmo them
+          {%- endif %}</span></div>
+      </div>
+    </section>
+
+    <section class="section" style="margin-top:0">
+      <div class="section-head"><h2>Inspectors &amp; humans</h2><span class="sub">the delete-tests</span></div>
+      <div class="kvs">
+        <div class="kv"><span class="k">band room</span><span class="v full">{{ loan.band_room_id or '—' }}</span></div>
+        <div class="kv"><span class="k">clerk settle event</span><span class="v full">{{ loan.clerk_settle_event_id or '—' }}</span></div>
+        <div class="kv"><span class="k">sandbox</span><span class="v full">{{ loan.sandbox_id or '—' }}</span></div>
+        <div class="kv"><span class="k">compare metric</span><span class="v full">{{ loan.compare_metric if loan.compare_metric is not none else '—' }}</span></div>
+        <div class="kv"><span class="k">terac opportunity</span><span class="v full">{{ loan.terac_opportunity_id or '—' }}</span></div>
+        <div class="kv"><span class="k">terac verdict</span><span class="v full">{{ loan.terac_verdict or '—' }}</span></div>
+        <div class="kv"><span class="k">terac submission</span><span class="v full">{{ loan.terac_submission_id or '—' }}</span></div>
+      </div>
+    </section>
+
+    <section class="section" style="margin-top:0">
+      <div class="section-head"><h2>Timeline</h2><span class="sub">handoff &amp; deadlines</span></div>
+      <div class="kvs">
+        <div class="kv"><span class="k">created</span><span class="v full">{{ loan.created_at.strftime('%b %d %Y %H:%M UTC') if loan.created_at else '—' }}</span></div>
+        <div class="kv"><span class="k">borrower GOT IT</span><span class="v full">{{ loan.borrower_got_it_at.strftime('%b %d %H:%M') if loan.borrower_got_it_at else '—' }}</span></div>
+        <div class="kv"><span class="k">lender GOT IT</span><span class="v full">{{ loan.lender_got_it_at.strftime('%b %d %H:%M') if loan.lender_got_it_at else '—' }}</span></div>
+        <div class="kv"><span class="k">return by</span><span class="v full">{{ loan.return_by_at.strftime('%b %d %H:%M') if loan.return_by_at else '—' }}</span></div>
+        <div class="kv"><span class="k">forfeited</span><span class="v full">{{ loan.forfeited_at.strftime('%b %d %H:%M') if loan.forfeited_at else '—' }}</span></div>
+      </div>
+    </section>
+  </div>
+
+  <div style="display:grid;gap:1.2rem">
+    {% if loan.state == 'blocked' and dispute_token %}
+    <section class="section" style="margin-top:0">
+      <div class="section-head"><h2>Dispute</h2><span class="sub">inspector verdict</span></div>
+      <div class="verdict-buttons">
+        <a class="btn" href="/disputes/{{ loan.id }}?t={{ dispute_token }}">open the inspector page</a>
+      </div>
+    </section>
+    {% endif %}
+
+    <section class="section" style="margin-top:0">
+      <div class="section-head"><h2>Photos</h2><span class="sub">orange tape, please</span></div>
+      <div class="photo-pair">
+        <figure>
+          <figcaption>Outbound</figcaption>
+          {% if item and item.outbound_media_id %}
+          <img src="/media/{{ item.outbound_media_id }}" alt="outbound photo" />
+          {% else %}<p class="tagline">no outbound photo</p>{% endif %}
+        </figure>
+        <figure>
+          <figcaption>Returned</figcaption>
+          {% if loan.return_media_id %}
+          <img src="/media/{{ loan.return_media_id }}" alt="return photo" />
+          {% else %}<p class="tagline">no return photo</p>{% endif %}
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" style="margin-top:0">
+      <div class="section-head"><h2>Raw</h2><span class="sub">all columns</span></div>
+      <div class="kvs">
+        {% for col in loan.__table__.columns %}
+        <div class="kv"><span class="k">{{ col.name }}</span><span class="v full">{{ loan.__dict__.get(col.name) if loan.__dict__.get(col.name) is not none else '—' }}</span></div>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

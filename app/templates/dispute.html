@@ -1,45 +1,50 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Dispute {{ loan.id[:8] }}</title>
-    <style>
-      body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 2rem; max-width: 40rem; }
-      .photos { display: flex; gap: 1rem; }
-      .photos figure { flex: 1; margin: 0; }
-      .photos img { width: 100%; border: 1px solid #ccc; }
-      figcaption { font-weight: 600; margin-bottom: 0.25rem; }
-      button { display: block; width: 100%; margin: 0.5rem 0; padding: 0.75rem; font-size: 1rem; }
-    </style>
-  </head>
-  <body>
-    <h1>RigShare dispute</h1>
-    <p>Loan {{ loan.id[:8] }} · {{ item.sku if item else "" }} · state {{ loan.state }}</p>
-    <p>Same cable going out and coming back? Look for the orange tape.</p>
-    <div class="photos">
+{% extends "base.html" %}
+
+{% block title %}Dispute {{ loan.id[:8] }} · RigShare{% endblock %}
+
+{% block content %}
+<section class="hero" style="padding-top:1rem">
+  <div>
+    <h1>Return dispute</h1>
+    <p class="tagline">
+      Loan <span class="mono">{{ loan.id[:8] }}</span> &middot; {{ item.sku if item else '' }} &middot;
+      <span class="badge state-{{ loan.state }}"><span class="dot"></span>{{ loan.state }}</span>
+    </p>
+    <p class="tagline">Same cable going out and coming back? Look for the <span style="color:var(--accent);font-weight:600">orange tape</span>.</p>
+  </div>
+</section>
+
+<div class="detail-grid">
+  <section class="section" style="margin-top:1.4rem">
+    <div class="photo-pair">
       <figure>
         <figcaption>Outbound</figcaption>
         {% if item and item.outbound_media_id %}
-          <img src="/media/{{ item.outbound_media_id }}" alt="outbound photo" />
-        {% else %}
-          <p>no outbound photo</p>
-        {% endif %}
+        <img src="/media/{{ item.outbound_media_id }}" alt="outbound photo" />
+        {% else %}<p class="tagline">no outbound photo</p>{% endif %}
       </figure>
       <figure>
         <figcaption>Returned</figcaption>
         {% if loan.return_media_id %}
-          <img src="/media/{{ loan.return_media_id }}" alt="return photo" />
-        {% else %}
-          <p>no return photo</p>
-        {% endif %}
+        <img src="/media/{{ loan.return_media_id }}" alt="return photo" />
+        {% else %}<p class="tagline">no return photo</p>{% endif %}
       </figure>
     </div>
-    <p>Pixel difference metric: {{ loan.compare_metric if loan.compare_metric is not none else "n/a" }}</p>
-    <form method="post" action="/disputes/{{ loan.id }}?t={{ token }}">
-      <button name="verdict" value="fine">Same item, fine</button>
-      <button name="verdict" value="damaged">Same item, damaged</button>
-      <button name="verdict" value="different">Different item</button>
+    <p class="tagline" style="margin-top:0.9rem">
+      Pixel difference metric:
+      <span class="mono">{{ loan.compare_metric if loan.compare_metric is not none else 'n/a' }}</span>
+      &middot; refund would be
+      <span class="mono">${{ '%.2f' % (refund_cents / 100) }}</span>
+    </p>
+  </section>
+
+  <section class="section" style="margin-top:1.4rem">
+    <div class="section-head"><h2>Your call</h2><span class="sub">this is what Terac pays a human for</span></div>
+    <form method="post" action="/disputes/{{ loan.id }}?t={{ token }}" class="verdict-buttons">
+      <button class="btn primary" name="verdict" value="fine">Same item, fine → full refund</button>
+      <button class="btn" name="verdict" value="damaged">Same item, damaged → keep $10</button>
+      <button class="btn warn-b" name="verdict" value="different">Different item → forfeit deposit</button>
     </form>
-  </body>
-</html>
+  </section>
+</div>
+{% endblock %}

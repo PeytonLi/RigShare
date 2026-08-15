@@ -1,52 +1,130 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>RigShare</title>
-    <style>
-      body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 2rem; max-width: 52rem; }
-      table { border-collapse: collapse; width: 100%; }
-      th, td { border-bottom: 1px solid #ddd; text-align: left; padding: 0.4rem 0.5rem; }
-      a { color: #0b57d0; }
-    </style>
-  </head>
-  <body>
-    <h1>RigShare</h1>
-    <p>Text the number. Borrow a charger. Pay a hold. Bring it back.</p>
-    <p><a href="/health">health</a></p>
+{% extends "base.html" %}
 
-    <h2>Items</h2>
-    {% if items %}
-    <table>
-      <tr><th>sku</th><th>status</th><th>hold</th></tr>
+{% block title %}RigShare · mission control{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <div>
+    <h1>One number.<br />Every cable in the room.</h1>
+    <p class="tagline">
+      Text <span class="mono">{{ from_number }}</span> to borrow a charger, Lightning cable, HDMI, or
+      dongle. Apple Pay a hold. Bring it back with the orange tape. Get most of it back.
+      RigShare is the switchboard — borrower and lender never share a number.
+    </p>
+  </div>
+  <div class="lede">
+    {{ loans|length }} loan{{ 's' if loans|length != 1 }} · {{ items|length }} item{{ 's' if items|length != 1 }}<br />
+    {{ money_status }} refund path · {{ ok_count }}/{{ vendor_count }} vendors up
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-head">
+    <h2>The company, end to end</h2>
+    <span class="sub">every loan walks these stages · a Render Workflow task runs each one</span>
+  </div>
+  <div class="pipeline">
+    {% for step in pipeline %}
+    <div class="pstep {% if step.active %}active{% elif step.done %}done{% endif %}{% if step.terminal %} terminal{% endif %}">
+      <div class="step-num">{{ '%02d' % loop.index }}</div>
+      <div class="step-name">{{ step.name }}</div>
+      <div class="step-who">{{ step.who }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-head">
+    <h2>Live status</h2>
+    <span class="sub">checked against the real APIs · cached 20s</span>
+  </div>
+  <div class="grid vendors">
+    {% for s in vendors %}
+    <div class="vendor {{ s.status }}">
+      <div class="ico">{{ s.key[0]|upper }}</div>
+      <div>
+        <div class="name">{{ s.key }}</div>
+        <div class="detail">{{ s.detail }}</div>
+      </div>
+      <div class="st"><span class="dot"></span>{{ s.status }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="section">
+  <div class="section-head">
+    <h2>Loans</h2>
+    <span class="sub">hold · lender · fee · refund — the money path per loan</span>
+  </div>
+  {% if loans %}
+  <div class="grid loans">
+    {% for loan in loans %}
+    {% set state = loan.state %}
+    <div class="loan">
+      <div class="loan-top">
+        <span class="badge state-{{ state }}"><span class="dot"></span>{{ state }}</span>
+        <div class="loan-title"><a href="/loans/{{ loan.id }}">{{ loan.title or loan.sku or loan.id[:8] }}</a></div>
+      </div>
+      <div class="loan-body">
+        <div class="moneyline">
+          <div class="m hold"><div class="mv">${{ '%.2f' % (loan.deposit_cents / 100) }}</div><div class="ml">hold</div></div>
+          <div class="m lender"><div class="mv">${{ '%.2f' % (loan.rental_cents / 100) }}</div><div class="ml">lender</div></div>
+          <div class="m fee"><div class="mv">${{ '%.2f' % (loan.platform_fee_cents / 100) }}</div><div class="ml">fee</div></div>
+          <div class="m refund"><div class="mv">${{ '%.2f' % (loan.refund_cents / 100) }}</div><div class="ml">refund</div></div>
+        </div>
+        <div class="kvs">
+          <div class="kv"><span class="k">created</span><span class="v">{{ loan.created_at.strftime('%b %d %H:%M') }}</span></div>
+          <div class="kv"><span class="k">payment intent</span><span class="v">{{ loan.stripe_payment_intent_id or '—' }}</span></div>
+          <div class="kv"><span class="k">refund</span><span class="v">{{ loan.stripe_refund_id or '—' }}</span></div>
+          <div class="kv"><span class="k">band room</span><span class="v">{{ loan.band_room_id or '—' }}</span></div>
+        </div>
+      </div>
+      <div class="loan-foot">
+        {% if loan.stripe_payment_intent_id %}<span class="chip pass">paid</span>{% endif %}
+        {% if loan.stripe_refund_id %}<span class="chip pass">refunded</span>{% endif %}
+        {% if loan.sandbox_id %}<span class="chip">sandbox</span>{% endif %}
+        {% if loan.terac_opportunity_id %}<span class="chip">terac</span>{% endif %}
+        {% if loan.compare_metric is not none %}<span class="chip">{{ loan.compare_metric }}px</span>{% endif %}
+        <a class="chip" href="/loans/{{ loan.id }}">open →</a>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty">
+    <p>No loans yet.</p>
+    <p style="font-size:0.85rem">Text <code>{{ from_number }}</code> from your phone: <code>LEND HDMI</code> or <code>NEED HDMI</code>.</p>
+  </div>
+  {% endif %}
+</section>
+
+<section class="section">
+  <div class="section-head">
+    <h2>Inventory</h2>
+    <span class="sub">listed · reserved · out · retired</span>
+  </div>
+  {% if items %}
+  <div class="panel" style="padding:0.4rem 0">
+    <table class="grid-table">
+      <tr>
+        <th>item</th><th>sku</th><th>status</th><th>hold</th><th>lender</th><th>fee</th>
+      </tr>
       {% for item in items %}
       <tr>
         <td>{{ item.title or item.sku }}</td>
-        <td>{{ item.status }}</td>
-        <td>{{ item.deposit_cents }}</td>
+        <td class="mono">{{ item.sku }}</td>
+        <td><span class="badge state-{{ item.status }}"><span class="dot"></span>{{ item.status }}</span></td>
+        <td class="mono">${{ '%.2f' % (item.deposit_cents / 100) }}</td>
+        <td class="mono">${{ '%.2f' % (item.rental_cents / 100) }}</td>
+        <td class="mono">${{ '%.2f' % (item.platform_fee_cents / 100) }}</td>
       </tr>
       {% endfor %}
     </table>
-    {% else %}
-    <p>No items yet.</p>
-    {% endif %}
-
-    <h2>Loans</h2>
-    {% if loans %}
-    <table>
-      <tr><th>id</th><th>state</th><th>pi</th><th>refund</th></tr>
-      {% for loan in loans %}
-      <tr>
-        <td><a href="/loans/{{ loan.id }}">{{ loan.id[:8] }}</a></td>
-        <td>{{ loan.state }}</td>
-        <td>{{ loan.stripe_payment_intent_id or "" }}</td>
-        <td>{{ loan.stripe_refund_id or "" }}</td>
-      </tr>
-      {% endfor %}
-    </table>
-    {% else %}
-    <p>No loans yet.</p>
-    {% endif %}
-  </body>
-</html>
+  </div>
+  {% else %}
+  <div class="empty"><p>No items yet.</p></div>
+  {% endif %}
+</section>
+{% endblock %}

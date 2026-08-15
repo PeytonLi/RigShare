@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 import pytest
@@ -24,17 +25,32 @@ def test_enrich_unknown_borrow_hdmi_becomes_need() -> None:
     parsed = ParsedCommand(kind=CommandKind.UNKNOWN, sku=None, loan_id=None, raw=text)
 
     def fake_post(url: str, headers: dict, body: dict) -> dict:
-        if "chat/completions" in url:
+        if "classifications" in body.get("schema", {}):
             return {
-                "classifications": [
-                    {"label": "prompt_safety", "value": "safe"},
-                    {"label": "jailbreak_detection", "value": "benign"},
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {"data": {"prompt_safety": {"label": "safe", "confidence": 0.9}}}
+                            )
+                        }
+                    }
                 ]
             }
         return {
-            "entities": [
-                {"label": "intent", "text": "borrow"},
-                {"label": "item", "text": "hdmi"},
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "entities": {
+                                    "intent": [{"text": "borrow", "confidence": 0.99, "start": 0, "end": 6}],
+                                    "item": [{"text": "hdmi", "confidence": 0.98, "start": 8, "end": 12}],
+                                }
+                            }
+                        )
+                    }
+                }
             ]
         }
 
@@ -57,12 +73,17 @@ def test_enrich_already_need_does_not_call_extract() -> None:
 
     def fake_post(url: str, headers: dict, body: dict) -> dict:
         nonlocal extract_called
-        if "inference" in url:
+        if "entities" in body.get("schema", {}):
             extract_called = True
         return {
-            "classifications": [
-                {"label": "prompt_safety", "value": "safe"},
-                {"label": "jailbreak_detection", "value": "benign"},
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {"data": {"prompt_safety": {"label": "safe", "confidence": 0.9}}}
+                        )
+                    }
+                }
             ]
         }
 
@@ -83,9 +104,14 @@ def test_enrich_unsafe_text_returns_unsafe_kind() -> None:
 
     def fake_post(url: str, headers: dict, body: dict) -> dict:
         return {
-            "classifications": [
-                {"label": "prompt_safety", "value": "unsafe"},
-                {"label": "jailbreak_detection", "value": "benign"},
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {"data": {"prompt_safety": {"label": "unsafe", "confidence": 0.99}}}
+                        )
+                    }
+                }
             ]
         }
 
@@ -103,17 +129,32 @@ def test_enrich_lend_intent_with_item() -> None:
     parsed = ParsedCommand(kind=CommandKind.UNKNOWN, sku=None, loan_id=None, raw=text)
 
     def fake_post(url: str, headers: dict, body: dict) -> dict:
-        if "chat/completions" in url:
+        if "classifications" in body.get("schema", {}):
             return {
-                "classifications": [
-                    {"label": "prompt_safety", "value": "safe"},
-                    {"label": "jailbreak_detection", "value": "benign"},
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {"data": {"prompt_safety": {"label": "safe", "confidence": 0.9}}}
+                            )
+                        }
+                    }
                 ]
             }
         return {
-            "entities": [
-                {"label": "intent", "text": "lend"},
-                {"label": "item", "text": "hdmi"},
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "entities": {
+                                    "intent": [{"text": "lend", "confidence": 0.99, "start": 0, "end": 4}],
+                                    "item": [{"text": "hdmi", "confidence": 0.98, "start": 12, "end": 16}],
+                                }
+                            }
+                        )
+                    }
+                }
             ]
         }
 

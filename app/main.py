@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy import select
@@ -13,13 +14,54 @@ from sqlalchemy.orm import Session
 from app.clerk import Unauthorized, apply_clerk_settle, check_secret
 from app.config import get_settings
 from app.db import get_db, init_db
-from app.disputes import router as disputes_router
+from app.disputes import ensure_dispute_token, router as disputes_router
 from app.linq_webhook import WebhookError, event_id, event_type, parse_event, verify_linq_signature
 from app.loans import handle_linq_event
+from app.money import refund_cents
 from app.models import Item, Loan, record_event
+from app.status import Status, status_all, status_summary
 from app.workflows_client import start_loan_tasks
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+STATIC_DIR = Path(__file__).parent / "static"
+
+# Loan state -> pipeline stage. Every loan walks these, and a Render Workflow task
+# runs each one. `active` is the stage the most recent loan is on.
+PIPELINE = [
+    {"name": "Ingest", "who": "Linq webhook · Pioneer"},
+    {"name": "Quote & charge", "who": "Agent Pay hold"},
+    {"name": "Deposit paid", "who": "walking · GOT IT"},
+    {"name": "Handoff", "who": "both said GOT IT"},
+    {"name": "Return photo", "who": "inspect sandbox"},
+    {"name": "Verdict", "who": "Band · Terac"},
+    {"name": "Settle", "who": "Stripe refund"},
+]
+
+_STATE_TO_STAGE = {
+    "matching": 0,
+    "awaiting_deposit": 1,
+    "walking": 2,
+    "out": 3,
+    "returning": 4,
+    "inspecting": 4,
+    "blocked": 5,
+    "settling": 6,
+    "closed": 6,
+    "cancelled": None,
+    "forfeited": None,
+}
+
+_VENDOR_LABELS = {
+    "money": "Linq → Stripe refund",
+    "render": "Render web",
+    "stripe": "Stripe",
+    "linq": "Linq (iMessage)",
+    "band": "Band agents",
+    "superserve": "Superserve",
+    "terac": "Terac",
+    "pioneer": "Pioneer",
+}
 
 
 @asynccontextmanager
@@ -29,7 +71,29 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="RigShare", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.include_router(disputes_router)
+
+
+def _dashboard_context() -> dict:
+    statuses = status_all()
+    money = statuses.get("money", Status("money", "skip", ""))
+    counts = status_summary(statuses)
+
+    active_index = None
+    recent = None
+    return {
+        "settings": get_settings(),
+        "vendors": [
+            {"key": s.key, "label": _VENDOR_LABELS.get(s.key, s.key), "status": s.status, "detail": s.detail}
+            for s in statuses.values()
+        ],
+        "money_status": money.status,
+        "ok_count": counts["pass"] + counts["warn"],
+        "vendor_count": len(statuses),
+        "from_number": get_settings().linq_from_number,
+        "refund_cents": refund_cents,
+    }
 
 
 @app.get("/health")
@@ -41,11 +105,35 @@ def health() -> dict:
 def home(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     loans = db.execute(select(Loan).order_by(Loan.created_at.desc())).scalars().all()
     items = db.execute(select(Item).order_by(Item.created_at.desc())).scalars().all()
-    return TEMPLATES.TemplateResponse(
-        request,
-        "home.html",
-        {"loans": loans, "items": items, "settings": get_settings()},
-    )
+
+    ctx = _dashboard_context()
+    ctx.update({"loans": loans, "items": items})
+
+    for loan in loans:
+        loan.refund_cents = refund_cents(
+            loan.deposit_cents, loan.rental_cents, loan.platform_fee_cents
+        )
+        item = db.get(Item, loan.item_id)
+        loan.title = item.title or item.sku if item is not None else None
+        loan.sku = item.sku if item is not None else None
+
+    # Which pipeline stage is "now"? The most recent non-terminal loan.
+    stage_now = None
+    for loan in loans:
+        idx = _STATE_TO_STAGE.get(loan.state)
+        if idx is not None:
+            stage_now = idx
+            break
+    pipeline = []
+    for i, step in enumerate(PIPELINE):
+        clone = dict(step)
+        if stage_now is not None:
+            clone["done"] = i < stage_now
+            clone["active"] = i == stage_now
+        pipeline.append(clone)
+    ctx["pipeline"] = pipeline
+
+    return TEMPLATES.TemplateResponse(request, "home.html", ctx)
 
 
 @app.get("/loans/{loan_id}", response_class=HTMLResponse)
@@ -54,11 +142,18 @@ def loan_detail(loan_id: str, request: Request, db: Session = Depends(get_db)) -
     if loan is None:
         return HTMLResponse("loan not found", status_code=404)
     item = db.get(Item, loan.item_id)
-    return TEMPLATES.TemplateResponse(
-        request,
-        "loan.html",
-        {"loan": loan, "item": item},
+    ctx = _dashboard_context()
+    ctx.update(
+        {
+            "loan": loan,
+            "item": item,
+            "refund_cents": refund_cents(
+                loan.deposit_cents, loan.rental_cents, loan.platform_fee_cents
+            ),
+            "dispute_token": ensure_dispute_token(loan) if loan.state == "blocked" else None,
+        }
     )
+    return TEMPLATES.TemplateResponse(request, "loan.html", ctx)
 
 
 @app.post("/webhooks/linq")
