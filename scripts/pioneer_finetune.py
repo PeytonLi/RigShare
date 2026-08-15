@@ -131,9 +131,9 @@ def main() -> int:
             print("WARN poll", exc.code)
             continue
         print("status", status.get("status"))
-        if status.get("status") in {"complete", "failed", "stopped"}:
+        if status.get("status") in {"deployed", "complete", "failed", "stopped"}:
             print(json.dumps(status, indent=2)[:2000])
-            return 0 if status.get("status") == "complete" else 1
+            return 0 if status.get("status") in {"deployed", "complete"} else 1
     print("still running; poll later")
     return 0
 

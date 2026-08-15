@@ -46,6 +46,30 @@ def test_catalog_survey_uses_gateway(fake: FakeTerac) -> None:
     assert fake.opportunities[0]["options"] == ["HDMI", "USB-C"]
 
 
+def test_live_path_creates_then_launches(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TERAC_API_KEY", "terac-key")
+    monkeypatch.setenv("TERAC_PROJECT_ID", "proj_1")
+    get_settings.cache_clear()
+    calls: list[tuple[str, str, dict | None]] = []
+
+    def fake_request(method: str, path: str, payload: dict | None = None) -> dict:
+        calls.append((method, path, payload))
+        return {"id": "opp_1"}
+
+    monkeypatch.setattr(terac_client, "_request", fake_request)
+
+    assert open_dispute("loan-1", "https://rigshare.onrender.com/disputes/loan-1?t=tok") == "opp_1"
+
+    assert [(m, p) for m, p, _ in calls] == [
+        ("POST", "/opportunities"),
+        ("POST", "/opportunities/opp_1/launch"),
+    ]
+    body = calls[0][2] or {}
+    assert body["project_id"] == "proj_1"
+    assert body["unrestricted_audience"] is True
+    assert body["tasks"][0]["task_url"].endswith("?t=tok")
+
+
 def test_no_api_key_returns_none_and_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TERAC_API_KEY", "")
     get_settings.cache_clear()

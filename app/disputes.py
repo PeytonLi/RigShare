@@ -62,6 +62,20 @@ def can_settle_after_dispute(loan: Loan) -> bool:
     )
 
 
+def apply_forfeit(session: Session, loan: Loan) -> Loan:
+    if loan.stripe_refund_id:
+        raise ValueError("already refunded")
+    apply_verdict(loan, "different")
+    item = session.get(Item, loan.item_id)
+    if item is not None:
+        item.status = "retired"
+    if loan.sandbox_id:
+        from app.superserve_client import kill_sandbox
+
+        kill_sandbox(loan.sandbox_id)
+    return loan
+
+
 def apply_verdict(loan: Loan, verdict: str) -> None:
     """Write the verdict only. Stripe is Clerk's / the settle workflow's job."""
     loan.terac_verdict = verdict
@@ -112,6 +126,13 @@ async def dispute_verdict(
 
     apply_verdict(loan, verdict)
     db.commit()
+    # The inspector tapping a button is the only signal a submission exists; nothing
+    # polls Terac on a timer. onTeracSubmission approves it so the human gets paid.
+    from app.workflows_client import start_task
+
+    start_task("onTeracSubmission", loan.id)
+    if verdict == "different":
+        start_task("forfeit", loan.id)
     return HTMLResponse(
         "<!doctype html><meta charset=utf-8><title>Thanks</title>"
         "<p style='font-family:ui-sans-serif,system-ui,sans-serif;margin:2rem'>"

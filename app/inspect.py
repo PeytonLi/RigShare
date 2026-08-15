@@ -6,14 +6,11 @@ from sqlalchemy.orm import Session
 
 from app.band_client import create_loan_room, post_room_message
 from app.config import get_settings
+from app.disputes import dispute_url
 from app.linq_client import send_text
 from app.models import Item, Loan
-from app.superserve_client import (
-    AE_BLOCK_THRESHOLD,
-    compare_return_photo,
-    ensure_outbound_sandbox,
-)
-from app.terac_client import create_activity_opportunity
+from app.superserve_client import inspect_outbound, inspect_return, is_blocked
+from app.terac_client import open_dispute
 
 log = logging.getLogger("rigshare")
 
@@ -28,10 +25,12 @@ def ensure_loan_room(session: Session, loan: Loan) -> str | None:
     return room_id
 
 
-def ensure_sandbox(session: Session, loan: Loan, jpeg: bytes = b"") -> str | None:
+def ensure_sandbox(session: Session, loan: Loan) -> str | None:
     if loan.sandbox_id:
         return loan.sandbox_id
-    sandbox_id = ensure_outbound_sandbox(loan.id, jpeg)
+    item = session.get(Item, loan.item_id)
+    media_id = item.outbound_media_id if item is not None else None
+    sandbox_id = inspect_outbound(loan.id, media_id)
     if sandbox_id:
         loan.sandbox_id = sandbox_id
         session.flush()
@@ -44,13 +43,11 @@ def run_quote_and_charge(session: Session, loan_id: str) -> dict:
         return {"ok": False, "error": "loan not found"}
     item = session.get(Item, loan.item_id)
     ensure_loan_room(session, loan)
-    jpeg = b""
-    ensure_sandbox(session, loan, jpeg)
-    room_id = loan.band_room_id
-    if room_id:
+    ensure_sandbox(session, loan)
+    if loan.band_room_id:
         sku = item.sku if item is not None else "item"
         post_room_message(
-            room_id,
+            loan.band_room_id,
             f"Borrower needs {sku}. loan_id={loan.id}. Pick the listed item.",
             mention_agent_id=get_settings().band_matcher_agent_id or None,
             mention_handle="Matcher",
@@ -67,16 +64,13 @@ def run_inspect_return(session: Session, loan_id: str) -> dict:
 
     loan.state = "inspecting"
     ensure_loan_room(session, loan)
-    sandbox_id = ensure_sandbox(session, loan, b"")
-    metric = None
-    if sandbox_id:
-        metric = compare_return_photo(sandbox_id, b"")
-        if metric is not None:
-            loan.compare_metric = metric
+    sandbox_id = ensure_sandbox(session, loan)
+    metric = inspect_return(sandbox_id, loan.return_media_id)
+    if metric is not None:
+        loan.compare_metric = metric
 
     settings = get_settings()
-    blocked = metric is not None and metric > AE_BLOCK_THRESHOLD
-    if blocked:
+    if is_blocked(metric):
         loan.state = "blocked"
         if loan.borrower_chat_id:
             send_text(
@@ -115,25 +109,16 @@ def run_open_dispute(session: Session, loan_id: str) -> dict:
     loan = session.get(Loan, loan_id)
     if loan is None:
         return {"ok": False, "error": "loan not found"}
-    if not loan.dispute_token:
-        import uuid
-
-        loan.dispute_token = uuid.uuid4().hex
-    settings = get_settings()
-    url = f"{settings.public_base_url.rstrip('/')}/disputes/{loan.id}?t={loan.dispute_token}"
+    url = dispute_url(loan)
     if not loan.terac_opportunity_id:
-        opportunity_id = create_activity_opportunity(
-            title=f"RigShare dispute {loan.id[:8]}",
-            task_url=url,
-            description="Compare outbound vs return. Tap Same item fine / damaged / Different item.",
-        )
+        opportunity_id = open_dispute(loan.id, url)
         if opportunity_id:
             loan.terac_opportunity_id = opportunity_id
     if loan.band_room_id:
         post_room_message(
             loan.band_room_id,
             f"Hiring a Terac inspector. Verdict page {url} loan_id={loan.id}",
-            mention_agent_id=settings.band_clerk_agent_id or None,
+            mention_agent_id=get_settings().band_clerk_agent_id or None,
             mention_handle="Clerk",
         )
     return {

@@ -21,9 +21,17 @@ def check_secret(provided: str | None) -> None:
 
 
 def apply_clerk_settle(session: Session, loan_id: str, event_id: str) -> Loan:
+    from app.disputes import can_settle_after_dispute
+
     loan = session.get(Loan, loan_id)
     if loan is None:
         raise ValueError(f"loan not found: {loan_id}")
+
+    # PRD 7.5 delete test lives here, not in the callers: every settle path (Clerk
+    # HTTP, lender SMS, the settle task) routes through this function, so a BLOCKED
+    # loan with no verdict must be refused once, here.
+    if not can_settle_after_dispute(loan):
+        raise ValueError("blocked: needs a Terac verdict or a lender override")
 
     if loan.clerk_settle_event_id is None:
         loan.clerk_settle_event_id = event_id
@@ -53,9 +61,10 @@ def apply_clerk_settle(session: Session, loan_id: str, event_id: str) -> Loan:
 
 
 def can_lender_settle(loan: Loan) -> bool:
-    settings = get_settings()
-    if loan.state == "blocked" and not loan.terac_verdict and settings.require_clerk_settle:
+    from app.disputes import can_settle_after_dispute
+
+    if not can_settle_after_dispute(loan):
         return False
-    if settings.require_clerk_settle:
+    if get_settings().require_clerk_settle:
         return bool(loan.clerk_settle_event_id)
     return True

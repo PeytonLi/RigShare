@@ -75,6 +75,15 @@ def _dispute_project_id() -> str:
     return _id(_request("POST", "/projects", {"name": DISPUTE_PROJECT_NAME}))
 
 
+def _create_and_launch(payload: dict) -> str | None:
+    """A created opportunity recruits nobody until it is launched."""
+    opportunity_id = _id(_request("POST", "/opportunities", payload))
+    if not opportunity_id:
+        return None
+    _request("POST", f"/opportunities/{opportunity_id}/launch", {})
+    return opportunity_id
+
+
 def open_dispute(loan_id: str, dispute_url: str) -> str | None:
     """Unmoderated opportunity whose one Activity task is our /disputes page."""
     if _gateway is not None:
@@ -83,30 +92,27 @@ def open_dispute(loan_id: str, dispute_url: str) -> str | None:
         log.warning("TERAC_API_KEY not set; skipping openDispute for loan %s", loan_id)
         return None
     try:
-        data = _request(
-            "POST",
-            "/opportunities",
+        return _create_and_launch(
             {
                 "project_id": _dispute_project_id(),
                 "name": f"RigShare return dispute {loan_id}",
                 "moderated": False,
-                "audience": "general_population",
+                "unrestricted_audience": True,
                 "participant_count": 1,
                 "tasks": [
                     {
                         "type": "activity",
                         "name": "Compare two photos of a returned cable",
                         "description": "Two photos, one loan. Tell us if it is the same item.",
-                        "url": dispute_url,
+                        "task_url": dispute_url,
                         "duration_minutes": 2,
                     }
                 ],
-            },
+            }
         )
     except Exception:
         log.exception("Terac openDispute failed for loan %s", loan_id)
         return None
-    return _id(data) or None
 
 
 def list_submissions(opportunity_id: str) -> list[dict]:
@@ -148,14 +154,12 @@ def launch_catalog_survey(question: str, options: list[str]) -> str | None:
         log.warning("TERAC_API_KEY not set; skipping catalog survey")
         return None
     try:
-        data = _request(
-            "POST",
-            "/opportunities",
+        return _create_and_launch(
             {
                 "project_id": _dispute_project_id(),
                 "name": "RigShare catalog check",
                 "moderated": False,
-                "audience": "general_population",
+                "unrestricted_audience": True,
                 "participant_count": 1,
                 "tasks": [
                     {
@@ -172,9 +176,8 @@ def launch_catalog_survey(question: str, options: list[str]) -> str | None:
                         ],
                     }
                 ],
-            },
+            }
         )
     except Exception:
         log.exception("Terac launch_catalog_survey failed")
         return None
-    return _id(data) or None
