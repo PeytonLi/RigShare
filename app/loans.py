@@ -7,13 +7,14 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.clerk import can_lender_settle
+from app.clerk import can_lender_settle, settle_loan
 from app.commands import CommandKind, parse_command
 from app.config import get_settings
 from app.ingest import enrich_command
 from app.linq_client import (
     create_payment_request,
     get_location,
+    get_payment_request,
     request_location,
     send_link,
     send_text,
@@ -28,8 +29,8 @@ from app.linq_webhook import (
     inbound_text,
 )
 from app.models import Item, Loan, get_or_create_user
-from app.money import quote, refund_cents
-from app.skus import SKUS, resolve_sku
+from app.money import PriceRejected, quote, refund_cents
+from app.skus import SKUS, prohibited_item, resolve_sku
 from app.stripe_client import refund_payment_intent
 
 log = logging.getLogger("rigshare")
@@ -62,7 +63,7 @@ def handle_linq_event(session: Session, event: dict) -> None:
     if kind == "message.received":
         handle_inbound(session, event)
         return
-    if kind == "payment.succeeded":
+    if kind in {"payment.succeeded", "payment.authorized"}:
         handle_payment_succeeded(session, event)
         return
     if kind == "location.sharing.started":
@@ -120,17 +121,36 @@ def handle_inbound(session: Session, event: dict) -> None:
     is_lender = phone == settings.lender_phone
 
     if cmd.kind == CommandKind.LEND:
+        banned = prohibited_item(text)
+        if banned is not None:
+            # PRD 4.5: we are holding a stranger's deposit, not running insurance.
+            send_text(
+                chat_id,
+                f"We can't hold a {banned}. RigShare is for cheap gear people forget. Not that.",
+            )
+            return
         sku = cmd.sku or resolve_sku(text)
         if sku is None:
             send_text(chat_id, "What are you lending? Reply LEND HDMI, LEND USB-C, or LEND LIGHTNING. Orange tape on it.")
             return
-        money = quote(sku, demo=settings.demo_mode)
+        try:
+            money = quote(
+                sku,
+                # Their own number always wins over the SKU table, demo or not.
+                demo=settings.demo_mode and cmd.deposit_cents is None,
+                deposit_cents=cmd.deposit_cents,
+                rental_cents=cmd.rental_cents,
+            )
+        except PriceRejected as exc:
+            send_text(chat_id, str(exc))
+            return
         item = Item(
             id=uuid.uuid4().hex,
             sku=sku,
             title=sku.replace("_", " "),
             lender_user_id=user.id,
-            status="listed",
+            # PRD 5.1: nothing is borrowable until the lender confirms the money.
+            status="pending",
             deposit_cents=money.deposit_cents,
             rental_cents=money.rental_cents,
             platform_fee_cents=money.platform_fee_cents,
@@ -141,10 +161,28 @@ def handle_inbound(session: Session, event: dict) -> None:
         session.flush()
         send_text(
             chat_id,
-            f"Listed {item.title}. {_dollars(money.deposit_cents)} hold. "
+            f"Got it. {item.title}, orange tape. {_dollars(money.deposit_cents)} hold. "
             f"You get {_dollars(money.rental_cents)} when it comes back. "
             f"Borrower also pays a {_dollars(money.platform_fee_cents)} RigShare fee (not taken from you). "
-            "Mark it with orange tape.",
+            "Reply YES to list it. Mark the item so we can tell it apart.",
+        )
+        return
+
+    if cmd.kind == CommandKind.YES:
+        item = session.execute(
+            select(Item)
+            .where(Item.lender_user_id == user.id, Item.status == "pending")
+            .order_by(Item.created_at.desc())
+        ).scalars().first()
+        if item is None:
+            send_text(chat_id, "Nothing waiting to be listed. Text LEND HDMI / USB-C / LIGHTNING with a photo.")
+            return
+        item.status = "listed"
+        item.lender_chat_id = chat_id
+        send_text(
+            chat_id,
+            f"Listed {item.title}. {_dollars(item.deposit_cents)} hold on the borrower. "
+            f"You get {_dollars(item.rental_cents)} when it comes back.",
         )
         return
 
@@ -190,7 +228,24 @@ def handle_inbound(session: Session, event: dict) -> None:
             f"{_dollars(refund)} refunded.",
         )
         send_link(chat_id, pay.checkout_url)
+        send_text(
+            chat_id,
+            "Pay that link. I'll text next steps when it clears. "
+            "If I don't, reply PAID.",
+        )
         start_task("quoteAndCharge", loan.id)
+        return
+
+    if cmd.kind == CommandKind.PAID:
+        loan = _active_loan_for(session, user.id)
+        if loan is None or loan.state != "awaiting_deposit":
+            send_text(chat_id, "No deposit waiting. If you already have the item, reply GOT IT.")
+            return
+        if not _confirm_payment_from_linq(session, loan):
+            send_text(
+                chat_id,
+                "I don't see the payment yet. Wait 10 seconds and reply PAID again.",
+            )
         return
 
     if cmd.kind == CommandKind.GOT_IT:
@@ -209,6 +264,7 @@ def handle_inbound(session: Session, event: dict) -> None:
             other = loan.lender_chat_id if user.id == loan.borrower_user_id else loan.borrower_chat_id
             if other and other != chat_id:
                 send_text(other, "Both said GOT IT. Loan is out.")
+            _send_status_link(loan)
             start_task("onHandoff", loan.id)
         elif loan.state == "awaiting_deposit":
             send_text(chat_id, "GOT IT noted. Waiting on the deposit to clear.")
@@ -265,57 +321,118 @@ def handle_inbound(session: Session, event: dict) -> None:
         send_text(chat_id, "Cancelled. Item is listed again.")
         return
 
+    loan = _active_loan_for(session, user.id)
+    if loan is not None and loan.state == "awaiting_deposit":
+        if _confirm_payment_from_linq(session, loan):
+            return
+        send_text(chat_id, "If you already paid, reply PAID. If not, use the pay link I sent.")
+        return
     send_text(chat_id, LIVE_REPLY)
 
 
-def handle_payment_succeeded(session: Session, event: dict) -> None:
+_PAID_STATUSES = {
+    "succeeded",
+    "paid",
+    "authorized",
+    "complete",
+    "completed",
+    "captured",
+}
+
+
+def _payment_fields(event: dict) -> tuple[str | None, str | None, str | None]:
     data = event.get("data") or {}
-    metadata = data.get("metadata") or {}
+    nested = data.get("payment_request") if isinstance(data.get("payment_request"), dict) else {}
+    metadata = data.get("metadata") or nested.get("metadata") or {}
     loan_id = metadata.get("loan_id")
-    request_id = data.get("id")
-    stripe = data.get("stripe") or {}
-    pi = stripe.get("payment_intent_id")
+    request_id = data.get("id") or data.get("payment_request_id") or nested.get("id")
+    stripe = data.get("stripe") or nested.get("stripe") or {}
+    pi = stripe.get("payment_intent_id") or data.get("payment_intent_id")
+    return (
+        str(loan_id) if loan_id else None,
+        str(request_id) if request_id else None,
+        str(pi) if pi else None,
+    )
+
+
+def _safe_request_location(chat_id: str) -> None:
+    try:
+        request_location(chat_id)
+    except Exception:
+        log.exception("location request failed chat=%s", chat_id)
+
+
+def _mark_deposit_paid(session: Session, loan: Loan, payment_intent_id: str | None) -> bool:
+    if payment_intent_id and not loan.stripe_payment_intent_id:
+        loan.stripe_payment_intent_id = payment_intent_id
+    if loan.state != "awaiting_deposit":
+        return bool(loan.stripe_payment_intent_id)
+    if not loan.stripe_payment_intent_id:
+        log.error("payment without payment_intent_id loan=%s", loan.id)
+        return False
+    loan.state = "walking"
+    item = session.get(Item, loan.item_id)
+    if item is not None:
+        item.status = "out"
+    if loan.borrower_chat_id:
+        send_text(
+            loan.borrower_chat_id,
+            "Paid. Meet the lender. When you are holding it, reply GOT IT.",
+        )
+        _safe_request_location(loan.borrower_chat_id)
+    if loan.lender_chat_id:
+        send_text(
+            loan.lender_chat_id,
+            "Deposit paid. Hand the item over. When they have it, reply GOT IT.",
+        )
+        _safe_request_location(loan.lender_chat_id)
+    start_task("onDepositPaid", loan.id)
+    if _try_hand_off(loan):
+        for chat in (loan.borrower_chat_id, loan.lender_chat_id):
+            if chat:
+                send_text(chat, "Both said GOT IT. Loan is out.")
+        start_task("onHandoff", loan.id)
+    return True
+
+
+def _confirm_payment_from_linq(session: Session, loan: Loan) -> bool:
+    if not loan.linq_payment_request_id:
+        return False
+    record = get_payment_request(loan.linq_payment_request_id)
+    if not record:
+        return False
+    status = str(record.get("status") or "").lower()
+    if status not in _PAID_STATUSES:
+        return False
+    stripe = record.get("stripe") or {}
+    pi = stripe.get("payment_intent_id") or record.get("payment_intent_id")
+    return _mark_deposit_paid(session, loan, str(pi) if pi else None)
+
+
+def handle_payment_succeeded(session: Session, event: dict) -> None:
+    loan_id, request_id, pi = _payment_fields(event)
     loan = None
     if loan_id:
-        loan = session.get(Loan, str(loan_id))
+        loan = session.get(Loan, loan_id)
     if loan is None and request_id:
         loan = session.execute(
-            select(Loan).where(Loan.linq_payment_request_id == str(request_id))
+            select(Loan).where(Loan.linq_payment_request_id == request_id)
         ).scalar_one_or_none()
     if loan is None:
-        log.warning("payment.succeeded with no loan data=%s", data)
+        log.warning("payment event with no loan data=%s", event.get("data"))
         return
-    if not loan.stripe_payment_intent_id and pi:
-        loan.stripe_payment_intent_id = str(pi)
-    if loan.state == "awaiting_deposit":
-        # PRD 6: `walking` without a payment intent is an illegal transition. No PI
-        # means no refund is possible later, so hold the loan instead of advancing.
-        if not loan.stripe_payment_intent_id:
-            log.error("payment.succeeded without payment_intent_id loan=%s", loan.id)
-            return
-        loan.state = "walking"
-        item = session.get(Item, loan.item_id)
-        if item is not None:
-            item.status = "out"
+    if not pi and (request_id or loan.linq_payment_request_id):
+        record = get_payment_request(request_id or loan.linq_payment_request_id or "")
+        if record:
+            stripe = record.get("stripe") or {}
+            pi = stripe.get("payment_intent_id") or record.get("payment_intent_id")
+            pi = str(pi) if pi else None
+    if not _mark_deposit_paid(session, loan, pi):
         if loan.borrower_chat_id:
             send_text(
                 loan.borrower_chat_id,
-                "Paid. Meet the lender. When you are holding it, reply GOT IT.",
+                "Payment came in but I still need the Stripe id. Reply PAID in a few seconds.",
             )
-            request_location(loan.borrower_chat_id)
-        if loan.lender_chat_id:
-            send_text(
-                loan.lender_chat_id,
-                "Deposit paid. Hand the item over. When they have it, reply GOT IT.",
-            )
-            request_location(loan.lender_chat_id)
-        start_task("onDepositPaid", loan.id)
-        # Either side may have said GOT IT before the webhook landed.
-        if _try_hand_off(loan):
-            for chat in (loan.borrower_chat_id, loan.lender_chat_id):
-                if chat:
-                    send_text(chat, "Both said GOT IT. Loan is out.")
-            start_task("onHandoff", loan.id)
 
 
 def _try_hand_off(loan: Loan) -> bool:
@@ -336,21 +453,11 @@ def _settle(session: Session, loan: Loan, chat_id: str) -> None:
     if not loan.stripe_payment_intent_id:
         send_text(chat_id, "No Stripe payment intent on this loan yet. Cannot refund.")
         return
-    amount = (
-        loan.manual_refund_cents
-        if loan.manual_refund_cents is not None
-        else refund_cents(loan.deposit_cents, loan.rental_cents, loan.platform_fee_cents)
-    )
-    refund_id = refund_payment_intent(
-        loan.stripe_payment_intent_id,
-        amount,
-        idempotency_key=f"loan-settle-{loan.id}",
-    )
-    loan.stripe_refund_id = refund_id
-    loan.state = "closed"
-    item = session.get(Item, loan.item_id)
-    if item is not None:
-        item.status = "listed"
+    try:
+        amount = settle_loan(session, loan)
+    except ValueError as exc:
+        send_text(chat_id, f"Cannot settle yet: {exc}")
+        return
     if loan.sandbox_id:
         from app.superserve_client import kill_sandbox
 
@@ -366,6 +473,18 @@ def _settle(session: Session, loan: Loan, chat_id: str) -> None:
             loan.borrower_chat_id,
             f"Returned. Refunded {_dollars(amount)}. It can take a few days to show on the card. You're done.",
         )
+    _send_status_link(loan)
+
+
+def _send_status_link(loan: Loan) -> None:
+    """PRD 7.1: the receipt page, after a state a human cares about.
+
+    Never on the first message of a chat -- Linq drops links that open a thread.
+    """
+    url = f"{get_settings().public_base_url.rstrip('/')}/loans/{loan.id}"
+    for chat in (loan.borrower_chat_id, loan.lender_chat_id):
+        if chat:
+            send_link(chat, url)
 
 
 def _active_loan_for(session: Session, user_id: str) -> Loan | None:

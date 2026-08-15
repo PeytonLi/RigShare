@@ -114,6 +114,74 @@ def forfeit(loan_id: str) -> dict:
 
 
 @app.task
+def sweepOverdue(loan_id: str = "") -> dict:
+    """PRD 4.4: chase loans past return_by_at + grace. Point a Render cron at this.
+
+    It never forfeits on its own -- it nags the borrower once and hands the decision
+    to Clerk. Keeping someone's deposit is a human call.
+    """
+    from datetime import timedelta, timezone
+
+    from app.band_client import post_room_message
+    from app.config import get_settings
+    from app.models import Loan, utcnow
+    from sqlalchemy import select
+
+    from app.linq_client import send_text
+
+    grace = timedelta(hours=2)
+    db = _session()
+    try:
+        now = utcnow()
+        overdue = (
+            db.execute(
+                select(Loan).where(
+                    Loan.state == "out",
+                    Loan.return_by_at.is_not(None),
+                    Loan.overdue_notified_at.is_(None),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        chased = []
+        for loan in overdue:
+            due = loan.return_by_at
+            if due is None:
+                continue
+            # SQLite hands back naive datetimes even for timezone=True columns.
+            if due.tzinfo is None:
+                due = due.replace(tzinfo=timezone.utc)
+            if now < due + grace:
+                continue
+            loan.overdue_notified_at = now
+            chased.append(loan.id)
+            if loan.borrower_chat_id:
+                send_text(
+                    loan.borrower_chat_id,
+                    "Your RigShare loan is past due. Reply RETURNING with a photo of "
+                    "the item and the tape. If it does not come back the deposit is kept.",
+                )
+            if loan.lender_chat_id:
+                send_text(loan.lender_chat_id, "Your item is overdue. We pinged the borrower.")
+            if loan.band_room_id:
+                post_room_message(
+                    loan.band_room_id,
+                    f"OVERDUE loan_id={loan.id} past return_by_at + 2h. "
+                    "Clerk: FORFEIT if it never comes back.",
+                    mention_agent_id=get_settings().band_clerk_agent_id or None,
+                    mention_handle="Clerk",
+                )
+        db.commit()
+        return {"ok": True, "task": "sweepOverdue", "chased": chased}
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@app.task
 def openDispute(loan_id: str) -> dict:
     from app.inspect import run_open_dispute
 

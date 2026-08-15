@@ -68,11 +68,19 @@ def _id(data: dict) -> str:
     return str(data.get("id") or data.get("opportunity_id") or "")
 
 
+# Terac rejects any study under a $5.00 budget, and 1 participant x 2 minutes
+# prices at $3.00 -- so PRD 7.5's "1 participant" can never be created. Two is
+# the cheapest configuration that launches; Clerk uses whichever verdict lands
+# first, so the second worker only costs money, not time.
+MIN_PARTICIPANTS = 2
+TASK_MINUTES = 2
+
+
 def _dispute_project_id() -> str:
     project_id = get_settings().terac_project_id
     if project_id:
         return project_id
-    return _id(_request("POST", "/projects", {"name": DISPUTE_PROJECT_NAME}))
+    return _id(_request("POST", "/projects", {"title": DISPUTE_PROJECT_NAME}))
 
 
 def _create_and_launch(payload: dict) -> str | None:
@@ -95,17 +103,20 @@ def open_dispute(loan_id: str, dispute_url: str) -> str | None:
         return _create_and_launch(
             {
                 "project_id": _dispute_project_id(),
-                "name": f"RigShare return dispute {loan_id}",
+                "title": f"RigShare return dispute {loan_id}",
+                "business_type": "b2c",
                 "moderated": False,
                 "unrestricted_audience": True,
-                "participant_count": 1,
+                "num_participants": MIN_PARTICIPANTS,
                 "tasks": [
                     {
-                        "type": "activity",
-                        "name": "Compare two photos of a returned cable",
+                        "sequence": 1,
+                        "task_type": "activity",
+                        "review_type": "manual_review",
+                        "title": "Compare two photos of a returned cable",
                         "description": "Two photos, one loan. Tell us if it is the same item.",
                         "task_url": dispute_url,
-                        "duration_minutes": 2,
+                        "duration_minutes": TASK_MINUTES,
                     }
                 ],
             }
@@ -157,23 +168,22 @@ def launch_catalog_survey(question: str, options: list[str]) -> str | None:
         return _create_and_launch(
             {
                 "project_id": _dispute_project_id(),
-                "name": "RigShare catalog check",
+                "title": "RigShare catalog check",
+                "business_type": "b2c",
                 "moderated": False,
                 "unrestricted_audience": True,
-                "participant_count": 1,
+                "num_participants": MIN_PARTICIPANTS,
                 "tasks": [
                     {
-                        "type": "survey",
-                        "name": question,
-                        "duration_minutes": 2,
-                        "questions": [
-                            {
-                                "prompt": question,
-                                "type": "multiple_choice",
-                                "multi_select": True,
-                                "options": options,
-                            }
-                        ],
+                        "sequence": 1,
+                        # task_type only accepts interview/file_upload/activity,
+                        # so the survey is an activity pointed at our own page.
+                        "task_type": "activity",
+                        "review_type": "auto_approve",
+                        "title": question,
+                        "description": " / ".join(options),
+                        "task_url": f"{get_settings().public_base_url}/survey",
+                        "duration_minutes": TASK_MINUTES,
                     }
                 ],
             }

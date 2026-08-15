@@ -8,6 +8,34 @@ Docs: [PRD](docs/PRD.md) · [Plan](docs/PLAN.md) · [Preflight](docs/PREFLIGHT.m
 
 Linq (iMessage + Agent Pay) · Stripe refunds · Band (Matcher / Condition / Clerk) · Terac (human inspector + catalog survey) · Pioneer (GLiNER2 / GLiGuard / PII) · Superserve (photo VM) · Render (web + Workflows + Postgres)
 
+## What people text
+
+| Text | Who | Meaning |
+|---|---|---|
+| `LEND HDMI` + photo | Lender | Start a listing at the SKU price |
+| `LEND HDMI $20 for $3` | Lender | Same, but **their own** hold and rental. Cap $80, deposit must exceed rental + fee |
+| `YES` | Lender | Confirm the listing. Nothing is borrowable until this |
+| `NEED HDMI` / free text | Borrower | Start a loan, get an Apple Pay link |
+| `GOT IT` | Both | Handoff done |
+| `RETURNING` + photo | Borrower | Start the return |
+| `SETTLE <loan_id>` | Lender | Refund (only from `LENDER_PHONE`) |
+| `CANCEL` | Either | Abort before the deposit clears |
+
+Laptops, phones, cameras and other expensive gear are refused at listing time — we
+hold the deposit, so the cap is what keeps this from being insurance.
+
+## Operating
+
+- **Money:** one refund path, `app/clerk.py::settle_loan`. It enforces the Band and
+  Terac gates and books what the lender is owed. Nothing else calls Stripe.
+- **Lender payouts** are recorded, not automated: `/loans/<id>` shows *unpaid* when a
+  third party listed the item. Venmo them and the row is your ledger.
+- **Overdue loans:** point a Render Workflows cron at the `sweepOverdue` task (hourly
+  is plenty). It nags the borrower once past `return_by_at` + 2h and asks Clerk to
+  decide. It never keeps a deposit on its own.
+- **Demo pricing:** `DEMO_MODE=true` lists everything at Linq's $0.50 floor. A
+  lender-set price always wins over it, so you can still film a real partial refund.
+
 ## Secrets
 
 Copy `.env.example` to `.env`. Never commit `.env` or `agent_config.yaml`.

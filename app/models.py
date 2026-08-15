@@ -80,6 +80,19 @@ class Loan(Base):
     lender_got_it_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     return_by_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     forfeited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # PRD 4.1: what we owe the lender. Paid by hand (Venmo) unless we are the lender.
+    lender_payout_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    lender_paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    overdue_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    matcher_item_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    matcher_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    matched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    condition_verdict: Mapped[str | None] = mapped_column(String, nullable=True)
+    condition_event_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    condition_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    pioneer_entities_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    copy_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    terac_hired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow

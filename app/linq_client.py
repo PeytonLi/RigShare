@@ -21,6 +21,8 @@ class FakeLinq:
         self.locations: list[str] = []
         self.media: dict[str, bytes] = {}
         self.chat_locations: dict[str, tuple[float, float]] = {}
+        self.payment_records: dict[str, dict] = {}
+        self.location_error: Exception | None = None
 
     def send_text(self, chat_id: str, text: str) -> None:
         self.texts.append((chat_id, text))
@@ -29,7 +31,12 @@ class FakeLinq:
         self.links.append((chat_id, url))
 
     def request_location(self, chat_id: str) -> None:
+        if self.location_error is not None:
+            raise self.location_error
         self.locations.append(chat_id)
+
+    def get_payment_request(self, request_id: str) -> dict | None:
+        return self.payment_records.get(request_id)
 
     def create_payment_request(self, amount_cents: int, description: str, metadata: dict) -> PaymentRequest:
         self.payments.append({"amount": amount_cents, "description": description, "metadata": metadata})
@@ -97,16 +104,31 @@ def send_link(chat_id: str, url: str) -> None:
 def create_payment_request(amount_cents: int, description: str, metadata: dict) -> PaymentRequest:
     if _gateway is not None:
         return _gateway.create_payment_request(amount_cents, description, metadata)
-    data = _live_post(
-        "/payment_requests",
-        {
-            "amount": amount_cents,
-            "currency": "usd",
-            "description": description,
-            "metadata": metadata,
-        },
-    )
+    payload: dict = {
+        "amount": amount_cents,
+        "currency": "usd",
+        "description": description,
+        "metadata": metadata,
+    }
+    from_number = get_settings().linq_from_number
+    if from_number:
+        payload["from"] = from_number
+    data = _live_post("/payment_requests", payload)
+    if "checkout_url" not in data and isinstance(data.get("data"), dict):
+        data = data["data"]
     return PaymentRequest(id=str(data["id"]), checkout_url=str(data["checkout_url"]))
+
+
+def get_payment_request(request_id: str) -> dict | None:
+    if _gateway is not None:
+        return _gateway.get_payment_request(request_id)
+    try:
+        data = _live_get(f"/payment_requests/{request_id}").json() or {}
+    except Exception:
+        return None
+    if "status" not in data and isinstance(data.get("data"), dict):
+        data = data["data"]
+    return data if data.get("id") or data.get("status") else None
 
 
 def request_location(chat_id: str) -> None:

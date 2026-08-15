@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.skus import SKUS
+from app.skus import MAX_DEPOSIT_CENTS, MIN_DEPOSIT_CENTS, SKUS
 
 # Product defaults live here, not in Settings/.env. A leftover DEFAULT_* in a
 # local env file must not silently change hallway quotes or tests.
@@ -41,7 +41,46 @@ def assert_money_invariant(
         raise ValueError("refund_cents must be non-negative")
 
 
-def quote(sku: str | None, *, demo: bool = False) -> MoneyQuote:
+class PriceRejected(ValueError):
+    """A lender asked for a price we will not hold. Message is customer-facing."""
+
+
+def _dollars(cents: int) -> str:
+    return f"${cents // 100}" if cents % 100 == 0 else f"${cents / 100:.2f}"
+
+
+def _reject_bad_price(deposit: int, rental: int, fee: int) -> None:
+    if deposit > MAX_DEPOSIT_CENTS:
+        raise PriceRejected(
+            f"{_dollars(deposit)} is over our {_dollars(MAX_DEPOSIT_CENTS)} cap. "
+            "RigShare is for cheap gear people forget. Not that."
+        )
+    if deposit < MIN_DEPOSIT_CENTS:
+        raise PriceRejected(
+            f"Deposits start at {_dollars(MIN_DEPOSIT_CENTS)}. Try a higher number."
+        )
+    if rental < 0:
+        raise PriceRejected("Rental cannot be negative.")
+    if rental + fee >= deposit:
+        raise PriceRejected(
+            f"The deposit has to be bigger than the rental plus the "
+            f"{_dollars(fee)} fee, or there is nothing to refund. "
+            f"Try a deposit over {_dollars(rental + fee)}."
+        )
+
+
+def quote(
+    sku: str | None,
+    *,
+    demo: bool = False,
+    deposit_cents: int | None = None,
+    rental_cents: int | None = None,
+) -> MoneyQuote:
+    """`deposit_cents`/`rental_cents` are the lender's own numbers when they set them.
+
+    Everything else stays the SKU table. Raises PriceRejected with copy you can text
+    straight back, so callers never have to phrase the refusal themselves.
+    """
     if demo:
         deposit = DEMO_DEPOSIT_CENTS
         rental = DEMO_RENTAL_CENTS
@@ -55,6 +94,14 @@ def quote(sku: str | None, *, demo: bool = False) -> MoneyQuote:
         deposit = DEFAULT_DEPOSIT_CENTS
         rental = DEFAULT_RENTAL_CENTS
         fee = DEFAULT_PLATFORM_FEE_CENTS
+
+    if deposit_cents is not None:
+        deposit = deposit_cents
+    if rental_cents is not None:
+        rental = rental_cents
+
+    if deposit_cents is not None or rental_cents is not None:
+        _reject_bad_price(deposit, rental, fee)
 
     refund = refund_cents(deposit, rental, fee)
     assert_money_invariant(deposit, rental, fee)

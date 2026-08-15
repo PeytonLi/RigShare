@@ -30,6 +30,11 @@ If you skip `YES`, `NEED HDMI` answers "Nothing listed for hdmi yet" — that is
 confirmation gate working, not a bug. `YES` only ever confirms the sender's own
 most recent pending listing.
 
+**To film a real partial refund**, set your own price instead of the demo one:
+`LEND HDMI $15 for $3` → $15 hold, $3 to the lender, $2 fee, **$10 refunded**. A
+lender-set price overrides `DEMO_MODE`, so nothing else has to change. Over $80, or
+a rental that eats the whole deposit, gets refused with the reason in the reply.
+
 ---
 
 ## 1. Borrower asks (35 s)

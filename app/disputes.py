@@ -101,10 +101,19 @@ def dispute_page(
     if not token_ok(loan, t):
         return HTMLResponse("bad or missing token", status_code=401)
     item = db.get(Item, loan.item_id)
+    from app.money import refund_cents
+
     return TEMPLATES.TemplateResponse(
         request,
         "dispute.html",
-        {"loan": loan, "item": item, "token": t},
+        {
+            "loan": loan,
+            "item": item,
+            "token": t,
+            "refund_cents": refund_cents(
+                loan.deposit_cents, loan.rental_cents, loan.platform_fee_cents
+            ),
+        },
     )
 
 

@@ -60,8 +60,20 @@ def test_lend_need_pay_settle_loop(client, db, _fake_linq):
     assert client.post("/webhooks/linq", content=body, headers=sign_linq_body(body, event_id="evt_lend")).status_code == 200
     item = db.execute(select(Item)).scalar_one()
     assert item.sku == "hdmi"
-    assert item.status == "listed"
+    assert item.status == "pending"
     assert item.deposit_cents == 1500
+
+    yes = message_received_payload(
+        text="YES",
+        chat_id="chat_l",
+        from_phone="+14159909839",
+        event_id="evt_yes",
+    )
+    body = dumps(yes)
+    assert client.post("/webhooks/linq", content=body, headers=sign_linq_body(body, event_id="evt_yes")).status_code == 200
+    db.expire_all()
+    item = db.execute(select(Item)).scalar_one()
+    assert item.status == "listed"
 
     need = message_received_payload(
         text="NEED HDMI",

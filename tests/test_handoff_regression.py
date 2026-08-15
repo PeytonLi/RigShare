@@ -79,6 +79,22 @@ def test_punctuation_does_not_break_commands(text: str, expected: str) -> None:
     assert parse_command(text).kind == expected
 
 
+@pytest.mark.parametrize(
+    "text,deposit,rental",
+    [
+        ("LEND HDMI $20", 2000, None),
+        ("LEND HDMI $20.50", 2050, None),
+        ("LEND HDMI $20.50 for $3.25", 2050, 325),
+        ("lend hdmi $20.50.", 2050, None),
+        ("LEND HDMI 6ft $20", 2000, None),
+    ],
+)
+def test_decimal_prices_survive_normalization(text: str, deposit: int, rental: int | None) -> None:
+    """Stripping '.' as punctuation turned $20.50 into a $2050.00 deposit."""
+    cmd = parse_command(text)
+    assert (cmd.deposit_cents, cmd.rental_cents) == (deposit, rental)
+
+
 def test_got_it_before_payment_still_hands_off(db) -> None:
     loan = _seed(db)
 

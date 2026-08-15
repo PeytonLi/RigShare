@@ -60,28 +60,34 @@ def create_loan_room(loan_id: str, title: str | None = None) -> str | None:
     settings = get_settings()
     room_title = title or f"loan-{loan_id[:8]}"
     try:
+        # Human API is Enterprise-only ("plan_required"). On any other plan this
+        # 403s, so it must not take the agent path down with it -- that failure
+        # left every loan with no Band room at all.
         if settings.band_human_api_key:
-            created = _request(
-                "POST",
-                "/me/chats",
-                settings.band_human_api_key,
-                {"title": room_title},
-            )
-            room_id = _room_id_from(created)
-            if room_id:
-                for agent_id in (
-                    settings.band_matcher_agent_id,
-                    settings.band_condition_agent_id,
-                    settings.band_clerk_agent_id,
-                ):
-                    if agent_id:
-                        _request(
-                            "POST",
-                            f"/me/chats/{room_id}/participants",
-                            settings.band_human_api_key,
-                            {"agent_id": agent_id},
-                        )
-                return room_id
+            try:
+                created = _request(
+                    "POST",
+                    "/me/chats",
+                    settings.band_human_api_key,
+                    {"title": room_title},
+                )
+                room_id = _room_id_from(created)
+                if room_id:
+                    for agent_id in (
+                        settings.band_matcher_agent_id,
+                        settings.band_condition_agent_id,
+                        settings.band_clerk_agent_id,
+                    ):
+                        if agent_id:
+                            _request(
+                                "POST",
+                                f"/me/chats/{room_id}/participants",
+                                settings.band_human_api_key,
+                                {"agent_id": agent_id},
+                            )
+                    return room_id
+            except Exception:
+                log.info("Band human API unavailable (needs Enterprise); using agent room")
         if not settings.band_matcher_api_key:
             return None
         created = _request(
@@ -107,6 +113,17 @@ def create_loan_room(loan_id: str, title: str | None = None) -> str | None:
         return None
 
 
+def _agents() -> list[tuple[str, str, str]]:
+    """(agent_id, api_key, handle) for every agent we hold credentials for."""
+    settings = get_settings()
+    trio = (
+        (settings.band_matcher_agent_id, settings.band_matcher_api_key, "Matcher"),
+        (settings.band_condition_agent_id, settings.band_condition_api_key, "Condition"),
+        (settings.band_clerk_agent_id, settings.band_clerk_api_key, "Clerk"),
+    )
+    return [(a, k, h) for a, k, h in trio if a and k]
+
+
 def post_room_message(
     room_id: str,
     content: str,
@@ -115,28 +132,41 @@ def post_room_message(
     mention_handle: str = "Condition",
     api_key: str | None = None,
 ) -> bool:
-    settings = get_settings()
-    key = api_key or settings.band_matcher_api_key or settings.band_clerk_api_key
-    if not key:
+    """Band rejects a message with no mentions ("minItems: 1") and rejects an
+    agent mentioning itself ("cannot_mention_self"), so the sender is always
+    chosen to be someone other than the agent being addressed.
+    """
+    agents = _agents()
+    if not agents:
         return False
+
+    target = next((a for a in agents if a[0] == mention_agent_id), None)
+    if target is None:
+        target = next((a for a in agents if a[2] == mention_handle), agents[0])
+
+    sender_key = api_key
+    if sender_key is None or sender_key == target[1]:
+        sender = next((a for a in agents if a[0] != target[0]), None)
+        if sender is None:
+            return False
+        sender_key = sender[1]
+
     redacted = redact_pii(content)
-    mentions = []
-    if mention_agent_id:
-        mentions.append(
-            {
-                "id": mention_agent_id,
-                "handle": mention_handle,
-                "name": mention_handle,
-            }
-        )
-        if f"@{mention_handle}" not in redacted:
-            redacted = f"@{mention_handle} {redacted}"
+    handle = target[2]
+    if f"@{handle}" not in redacted:
+        redacted = f"@{handle} {redacted}"
+
     try:
         _request(
             "POST",
             f"/agent/chats/{room_id}/messages",
-            key,
-            {"message": {"content": redacted, "mentions": mentions}},
+            sender_key,
+            {
+                "message": {
+                    "content": redacted,
+                    "mentions": [{"id": target[0], "handle": handle, "name": handle}],
+                }
+            },
         )
         return True
     except Exception:

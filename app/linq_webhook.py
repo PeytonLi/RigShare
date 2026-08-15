@@ -97,8 +97,8 @@ def inbound_media_ids(event: dict) -> list[str]:
 
 
 def event_type(event: dict) -> str:
-    return str(event["event_type"])
+    return str(event.get("event_type") or event.get("type") or "")
 
 
 def event_id(event: dict) -> str:
-    return str(event["event_id"])
+    return str(event.get("event_id") or event.get("id") or "")

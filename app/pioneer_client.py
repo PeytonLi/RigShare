@@ -1,12 +1,37 @@
+"""Pioneer encoder models (PRD 8).
+
+Everything goes through POST /v1/chat/completions with `Authorization: Bearer`.
+There is no /inference endpoint -- the earlier version posted there and every
+call raised, so the guard always passed and PII was never actually redacted.
+
+Encoder models take a `schema` instead of a prompt and answer with JSON encoded
+inside choices[0].message.content:
+
+  entities        {"entities": {"item": [{"text","confidence","start","end"}]}}
+  classifications {"data": {"prompt_safety": {"label","confidence"}}}
+
+Only `prompt_safety` is used. GLiGuard's `jailbreak_detection` labels come back
+inverted -- "yes" on "GOT IT" and "no" on real injections -- so wiring it up
+would block the demo. Also note the classifications schema must be a dict of
+task -> labels; the list-of-tasks form answers "safe" for prompts the dict form
+scores unsafe at 0.999.
+"""
+
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import Callable
 from typing import Any
 
 from app.config import get_settings
 
-GUARD_URL = "https://api.pioneer.ai/v1/chat/completions"
-INFERENCE_URL = "https://api.pioneer.ai/inference"
+log = logging.getLogger("rigshare")
+
+PIONEER_URL = "https://api.pioneer.ai/v1/chat/completions"
+
+NER_ENTITIES = ["intent", "item", "brand", "connector", "duration", "rental_fee"]
+PII_ENTITIES = ["person", "email", "phone_number"]
 
 _post: Callable[[str, dict[str, str], dict[str, Any]], dict[str, Any]] | None = None
 
@@ -28,218 +53,95 @@ def _do_post(url: str, headers: dict[str, str], body: dict[str, Any]) -> dict[st
     return response.json()
 
 
-def _classification_map(data: dict[str, Any]) -> dict[str, str]:
-    classifications = data.get("classifications")
-    if not isinstance(classifications, list):
-        return {}
-    result: dict[str, str] = {}
-    for item in classifications:
-        if not isinstance(item, dict):
-            continue
-        label = item.get("label")
-        value = item.get("value")
-        if isinstance(label, str) and isinstance(value, str):
-            result[label.lower()] = value.lower()
-    return result
+def _call(model: str, schema: dict[str, Any], text: str, api_key: str) -> dict[str, Any] | None:
+    """Returns the decoded model payload, or None if the call or parse failed."""
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    body = {"model": model, "messages": [{"role": "user", "content": text}], "schema": schema}
+    try:
+        envelope = _do_post(PIONEER_URL, headers, body)
+        content = envelope["choices"][0]["message"]["content"]
+    except Exception:
+        log.warning("pioneer call failed model=%s", model, exc_info=True)
+        return None
+    if isinstance(content, dict):
+        return content
+    try:
+        return json.loads(content)
+    except (TypeError, ValueError):
+        log.warning("pioneer returned unparseable content model=%s", model)
+        return None
+
+
+def _entities(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    entities = payload.get("entities")
+    return entities if isinstance(entities, dict) else {}
 
 
 def guard_is_safe(text: str) -> bool:
+    """False only on a confident `unsafe`. Fails open: a vendor outage must not
+    silence the number mid-demo."""
     settings = get_settings()
-    if not settings.pioneer_api_key:
+    key = settings.pioneer_guard_api_key or settings.pioneer_api_key
+    if not key:
         return True
-
-    model = settings.pioneer_guard_model_id or "fastino/gliguard-LLMGuardrails-300M"
-    body = {
-        "model": model,
-        "messages": [{"role": "user", "content": text}],
-        "schema": {
-            "classifications": [
-                {
-                    "task": "prompt_safety",
-                    "labels": ["safe", "unsafe"],
-                    "multi_label": False,
-                    "threshold": 0.5,
-                },
-                {
-                    "task": "jailbreak_detection",
-                    "labels": ["benign", "prompt_injection", "jailbreak_attempt"],
-                    "multi_label": True,
-                    "threshold": 0.5,
-                },
-            ]
-        },
-        "include_confidence": True,
-    }
-    headers = {
-        "Authorization": f"Bearer {settings.pioneer_api_key}",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        data = _do_post(GUARD_URL, headers, body)
-    except Exception:
+    payload = _call(
+        settings.pioneer_guard_model_id,
+        {"classifications": {"prompt_safety": ["safe", "unsafe"]}},
+        text,
+        key,
+    )
+    if payload is None:
         return True
-
-    labels = _classification_map(data)
-    if labels.get("prompt_safety") == "unsafe":
-        return False
-
-    jailbreak = labels.get("jailbreak_detection", "")
-    if jailbreak and jailbreak not in ("benign", ""):
-        return False
-
-    return True
-
-
-def _first_text(value: Any) -> str | None:
-    if isinstance(value, str) and value:
-        return value
-    if isinstance(value, list) and value:
-        first = value[0]
-        if isinstance(first, str) and first:
-            return first
-    return None
-
-
-def _parse_entities(data: dict[str, Any]) -> dict[str, str]:
-    result: dict[str, str] = {}
-
-    entities = data.get("entities")
-    if isinstance(entities, list):
-        for item in entities:
-            if not isinstance(item, dict):
-                continue
-            label = item.get("label")
-            text = item.get("text") or item.get("span")
-            if isinstance(label, str) and isinstance(text, str) and text:
-                key = label.lower()
-                if key not in result:
-                    result[key] = text.lower()
-        return result
-
-    if isinstance(entities, dict):
-        for label, value in entities.items():
-            if not isinstance(label, str):
-                continue
-            text = _first_text(value)
-            if text:
-                key = label.lower()
-                if key not in result:
-                    result[key] = text.lower()
-        return result
-
-    predictions = data.get("predictions")
-    if isinstance(predictions, list):
-        for item in predictions:
-            if not isinstance(item, dict):
-                continue
-            label = item.get("label")
-            text = item.get("span") or item.get("text")
-            if isinstance(label, str) and isinstance(text, str) and text:
-                key = label.lower()
-                if key not in result:
-                    result[key] = text.lower()
-
-    return result
+    verdict = (payload.get("data") or {}).get("prompt_safety") or {}
+    return str(verdict.get("label", "safe")).lower() != "unsafe"
 
 
 def extract_entities(text: str) -> dict[str, str]:
+    """{entity_label: highest-confidence span}, lowercased for SKU matching."""
     settings = get_settings()
-    if not settings.pioneer_api_key:
+    key = settings.pioneer_ner_api_key or settings.pioneer_api_key
+    if not key:
         return {}
-
-    model_id = settings.pioneer_ner_model_id or "fastino/gliner2-base-v1"
-    body = {
-        "model_id": model_id,
-        "text": text,
-        "schema": {
-            "entities": [
-                "intent",
-                "item",
-                "brand",
-                "connector",
-                "duration",
-                "rental_fee",
-            ],
-            "threshold": 0.4,
-        },
-    }
-    headers = {
-        "X-API-Key": settings.pioneer_api_key,
-        "Content-Type": "application/json",
-    }
-
-    try:
-        data = _do_post(INFERENCE_URL, headers, body)
-    except Exception:
+    model = settings.pioneer_ner_model_id or settings.pioneer_ner_base_model
+    payload = _call(model, {"entities": NER_ENTITIES}, text, key)
+    if payload is None:
         return {}
-
-    return _parse_entities(data)
-
-
-def _entity_spans(data: dict[str, Any]) -> list[tuple[str, str]]:
-    spans: list[tuple[str, str]] = []
-
-    entities = data.get("entities")
-    if isinstance(entities, list):
-        for item in entities:
-            if not isinstance(item, dict):
-                continue
-            text = item.get("text") or item.get("span")
-            if isinstance(text, str) and text:
-                spans.append((text, text))
-        return spans
-
-    if isinstance(entities, dict):
-        for values in entities.values():
-            text = _first_text(values)
-            if text:
-                spans.append((text, text))
-
-    predictions = data.get("predictions")
-    if isinstance(predictions, list):
-        for item in predictions:
-            if not isinstance(item, dict):
-                continue
-            text = item.get("span") or item.get("text")
-            if isinstance(text, str) and text:
-                spans.append((text, text))
-
-    return spans
+    result: dict[str, str] = {}
+    for label, hits in _entities(payload).items():
+        if not isinstance(hits, list) or not hits:
+            continue
+        best = max(hits, key=lambda h: h.get("confidence", 0) if isinstance(h, dict) else 0)
+        span = best.get("text") if isinstance(best, dict) else None
+        if isinstance(span, str) and span:
+            result[label.lower()] = span.lower()
+    return result
 
 
 def redact_pii(text: str) -> str:
+    """Blank out person/email/phone before anything reaches Band (PRD 7.3)."""
     settings = get_settings()
-    if not settings.pioneer_api_key:
+    key = settings.pioneer_pii_api_key or settings.pioneer_api_key
+    if not key:
+        return text
+    payload = _call(settings.pioneer_pii_model_id, {"entities": PII_ENTITIES}, text, key)
+    if payload is None:
         return text
 
-    model_id = (
-        settings.pioneer_pii_model_id or "fastino/gliner2-privacy-filter-PII-multi"
-    )
-    body = {
-        "model_id": model_id,
-        "text": text,
-        "schema": {
-            "entities": ["person", "email", "phone_number"],
-            "threshold": 0.4,
-        },
-    }
-    headers = {
-        "X-API-Key": settings.pioneer_api_key,
-        "Content-Type": "application/json",
-    }
+    spans: list[tuple[int, int]] = []
+    for hits in _entities(payload).values():
+        if not isinstance(hits, list):
+            continue
+        for hit in hits:
+            if not isinstance(hit, dict):
+                continue
+            start, end = hit.get("start"), hit.get("end")
+            if isinstance(start, int) and isinstance(end, int) and 0 <= start < end <= len(text):
+                spans.append((start, end))
 
-    try:
-        data = _do_post(INFERENCE_URL, headers, body)
-    except Exception:
-        return text
-
-    spans = _entity_spans(data)
     if not spans:
         return text
-
+    # Right to left so earlier offsets stay valid as the string shrinks.
     result = text
-    for original, _ in sorted(spans, key=lambda pair: len(pair[0]), reverse=True):
-        result = result.replace(original, "[redacted]")
-
+    for start, end in sorted(spans, reverse=True):
+        result = result[:start] + "[redacted]" + result[end:]
     return result

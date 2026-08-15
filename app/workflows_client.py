@@ -31,7 +31,13 @@ def _default_starter(identifier: str, payload: dict[str, str]) -> Any:
         try:
             asyncio.run(_run())
         except Exception:
-            log.exception("Background workflow start failed %s", identifier)
+            # This thread's failure used to vanish into the log while start_task
+            # still reported "started", so a missing Workflow service silently
+            # skipped every sandbox, Band room and inspection. Do the work here.
+            log.exception("Workflow start failed %s; running task locally", identifier)
+            loan_id = payload.get("loan_id")
+            if loan_id:
+                _run_local_task(identifier.rsplit("/", 1)[-1], loan_id)
 
     threading.Thread(target=_go, daemon=True).start()
     return "started"
@@ -71,9 +77,15 @@ def _run_local_task(name: str, loan_id: str) -> None:
 
 def start_task(name: str, loan_id: str) -> str | None:
     settings = get_settings()
-    if not settings.render_workflow_slug:
+    # A slug alone is not enough: render_sdk needs RENDER_API_KEY, and without it
+    # every task fails in a background thread. Prefer the in-process path, which
+    # actually works, unless Render is genuinely configured.
+    render_ready = bool(settings.render_workflow_slug) and (
+        _starter is not None or bool(os.environ.get("RENDER_API_KEY"))
+    )
+    if not render_ready:
         if os.environ.get("PYTEST_CURRENT_TEST"):
-            log.info("Render workflow slug not configured; skipping task %s", name)
+            log.info("Render workflows not configured; skipping task %s", name)
             return None
         threading.Thread(target=_run_local_task, args=(name, loan_id), daemon=True).start()
         return "local"
