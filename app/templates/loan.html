@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Loan {{ loan.id[:8] }}</title>
+    <style>
+      body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 2rem; max-width: 52rem; }
+      dt { font-weight: 600; }
+      dd { margin: 0 0 0.75rem 0; }
+    </style>
+  </head>
+  <body>
+    <p><a href="/">RigShare</a></p>
+    <h1>Loan {{ loan.id[:8] }}</h1>
+    <dl>
+      <dt>state</dt><dd>{{ loan.state }}</dd>
+      <dt>item</dt><dd>{{ item.sku if item else loan.item_id }}</dd>
+      <dt>deposit / rental / fee</dt>
+      <dd>{{ loan.deposit_cents }} / {{ loan.rental_cents }} / {{ loan.platform_fee_cents }}</dd>
+      <dt>linq payment request</dt><dd>{{ loan.linq_payment_request_id }}</dd>
+      <dt>stripe payment intent</dt><dd>{{ loan.stripe_payment_intent_id }}</dd>
+      <dt>stripe refund</dt><dd>{{ loan.stripe_refund_id }}</dd>
+      <dt>borrower chat</dt><dd>{{ loan.borrower_chat_id }}</dd>
+      <dt>lender chat</dt><dd>{{ loan.lender_chat_id }}</dd>
+    </dl>
+  </body>
+</html>

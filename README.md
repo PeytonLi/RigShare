@@ -36,8 +36,9 @@ Create an **Environment Group** named `rigshare-secrets`. Paste everything from 
 
 ### After the web URL exists
 
-1. Linq dashboard → webhook URL `https://<your-service>.onrender.com/webhooks/linq` (that route is not wired yet; do this after the next code drop).
-2. Copy the signing secret into `LINQ_WEBHOOK_SECRET`.
+1. Linq dashboard → webhook URL `https://rigshare.onrender.com/webhooks/linq?version=2026-02-03`
+   Subscribe to at least `message.received` and `payment.succeeded`.
+2. Copy the signing secret into `LINQ_WEBHOOK_SECRET` on the env group. Save and deploy web.
 3. Dashboard → **New** → **Workflows** (Python). Same repo. Workflows cannot go in `render.yaml`.
    - Build: `pip install -r requirements.txt`
    - Start: `python main.py` (this is the Workflows file at repo root, not FastAPI)
