@@ -45,6 +45,8 @@ class Item(Base):
     rental_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     platform_fee_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     outbound_media_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Where the lender listed from, so we can text them before they speak again.
+    lender_chat_id: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -65,6 +67,10 @@ class Loan(Base):
     stripe_payment_intent_id: Mapped[str | None] = mapped_column(String, nullable=True)
     stripe_refund_id: Mapped[str | None] = mapped_column(String, nullable=True)
     clerk_settle_event_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    band_room_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    sandbox_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    compare_metric: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    terac_opportunity_id: Mapped[str | None] = mapped_column(String, nullable=True)
     borrower_got_it_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     lender_got_it_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     return_by_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

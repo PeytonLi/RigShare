@@ -1,15 +1,30 @@
-"""Placeholder worker so Render can boot the agent service.
+"""Render worker: run Matcher, Condition, and Clerk Band agents concurrently."""
 
-Real Matcher / Condition / Clerk loops land in a later commit.
-"""
+from __future__ import annotations
 
-import time
+import asyncio
+import logging
+
+from agents import clerk, condition, matcher
+
+logging.basicConfig(level=logging.INFO)
 
 
 def main() -> None:
-    print("rigshare-agents worker started (idle until agents are wired)")
+    asyncio.run(_amain())
+
+
+async def _amain() -> None:
+    print("rigshare-agents worker started")
+    await asyncio.gather(
+        matcher.run(),
+        condition.run(),
+        clerk.run(),
+        return_exceptions=True,
+    )
+    # if all returned immediately, idle so Render does not restart-loop
     while True:
-        time.sleep(60)
+        await asyncio.sleep(60)
 
 
 if __name__ == "__main__":

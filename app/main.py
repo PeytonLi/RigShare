@@ -6,14 +6,17 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.clerk import Unauthorized, apply_clerk_settle, check_secret
 from app.config import get_settings
 from app.db import get_db, init_db
 from app.linq_webhook import WebhookError, event_id, event_type, parse_event, verify_linq_signature
 from app.loans import handle_linq_event
 from app.models import Item, Loan, record_event
+from app.workflows_client import start_loan_tasks
 
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -66,12 +69,60 @@ async def linq_webhook(request: Request, db: Session = Depends(get_db)):
         return JSONResponse({"error": str(exc)}, status_code=401)
 
     event = parse_event(body)
+    # handle_linq_event does blocking Linq/Stripe HTTP with a 20s timeout. Running
+    # it inline would stall the event loop for every other request; PRD 10 wants
+    # this handler back under 2s.
+    await run_in_threadpool(_process_linq_event, db, event)
+    return {"ok": True}
+
+
+def _process_linq_event(db: Session, event: dict) -> None:
     try:
         _, created = record_event(db, event_id(event), event_type(event), event)
         if created:
             handle_linq_event(db, event)
+            loan_id = None
+            data = event.get("data") or {}
+            meta = data.get("metadata") or {}
+            if meta.get("loan_id"):
+                loan_id = str(meta["loan_id"])
+            start_loan_tasks(event_type(event), loan_id)
         db.commit()
     except Exception:
         db.rollback()
         raise
-    return {"ok": True}
+
+
+@app.post("/internal/clerk-settle")
+async def clerk_settle(request: Request, db: Session = Depends(get_db)):
+    try:
+        check_secret(request.headers.get("x-internal-secret"))
+    except Unauthorized:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    body = await request.json()
+    loan_id = str(body.get("loan_id") or "")
+    event_id_value = str(body.get("event_id") or "")
+    if not loan_id or not event_id_value:
+        return JSONResponse({"error": "loan_id and event_id required"}, status_code=400)
+    try:
+        loan = apply_clerk_settle(db, loan_id, event_id_value)
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    from app.workflows_client import start_task
+
+    start_task("settle", loan.id)
+    return {"ok": True, "loan_id": loan.id, "refund_id": loan.stripe_refund_id}
+
+
+@app.get("/disputes/{loan_id}", response_class=HTMLResponse)
+def dispute(loan_id: str, request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+    loan = db.get(Loan, loan_id)
+    if loan is None:
+        return HTMLResponse("loan not found", status_code=404)
+    item = db.get(Item, loan.item_id)
+    return TEMPLATES.TemplateResponse(
+        "dispute.html",
+        {"request": request, "loan": loan, "item": item},
+    )

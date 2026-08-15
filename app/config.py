@@ -28,7 +28,18 @@ class Settings(BaseSettings):
     demo_platform_fee_cents: int = 100
 
     render_workflow_slug: str = ""
+    require_clerk_settle: bool = False
+    # Encoder models each carry their own key and are absent from GET /v1/models.
+    # gliner2-base-v1 does not exist on this account; large-v1 is the real one.
     pioneer_api_key: str = ""
+    pioneer_decoder_model_id: str = "claude-haiku-4-5"
+    pioneer_ner_base_model: str = "fastino/gliner2-large-v1"
+    pioneer_ner_model_id: str = "fastino/gliner2-large-v1"
+    pioneer_ner_api_key: str = ""
+    pioneer_guard_model_id: str = "fastino/gliguard-LLMGuardrails-300M"
+    pioneer_guard_api_key: str = ""
+    pioneer_pii_model_id: str = "fastino/gliner2-privacy-filter-PII-multi"
+    pioneer_pii_api_key: str = ""
     terac_api_key: str = ""
     terac_project_id: str = ""
     superserve_api_key: str = ""

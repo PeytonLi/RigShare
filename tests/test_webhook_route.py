@@ -131,3 +131,50 @@ def test_lend_need_pay_settle_loop(client, db, _fake_linq):
     page = client.get(f"/loans/{loan.id}")
     assert page.status_code == 200
     assert b"closed" in page.content
+
+
+def test_clerk_settle_endpoint(client, db):
+    from app.models import Item, get_or_create_user
+
+    lender = get_or_create_user(db, "+14159909839")
+    borrower = get_or_create_user(db, "+17034051525")
+    item = Item(
+        id="item_clerk",
+        sku="hdmi",
+        title="hdmi",
+        lender_user_id=lender.id,
+        status="out",
+        deposit_cents=1500,
+        rental_cents=300,
+        platform_fee_cents=200,
+    )
+    loan = Loan(
+        id="loan_clerk",
+        item_id=item.id,
+        borrower_user_id=borrower.id,
+        lender_user_id=lender.id,
+        state="returning",
+        deposit_cents=1500,
+        rental_cents=300,
+        platform_fee_cents=200,
+        stripe_payment_intent_id="pi_clerk",
+    )
+    db.add_all([item, loan])
+    db.commit()
+    bad = client.post(
+        "/internal/clerk-settle",
+        headers={"X-Internal-Secret": "wrong"},
+        json={"loan_id": "loan_clerk", "event_id": "evt_clerk"},
+    )
+    assert bad.status_code == 401
+    ok = client.post(
+        "/internal/clerk-settle",
+        headers={"X-Internal-Secret": "test-settle"},
+        json={"loan_id": "loan_clerk", "event_id": "evt_clerk"},
+    )
+    assert ok.status_code == 200
+    db.expire_all()
+    loan = db.get(Loan, "loan_clerk")
+    assert loan.clerk_settle_event_id == "evt_clerk"
+    assert loan.state == "closed"
+    assert loan.stripe_refund_id == "re_test"

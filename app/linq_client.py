@@ -18,12 +18,16 @@ class FakeLinq:
         self.texts: list[tuple[str, str]] = []
         self.links: list[tuple[str, str]] = []
         self.payments: list[dict] = []
+        self.locations: list[str] = []
 
     def send_text(self, chat_id: str, text: str) -> None:
         self.texts.append((chat_id, text))
 
     def send_link(self, chat_id: str, url: str) -> None:
         self.links.append((chat_id, url))
+
+    def request_location(self, chat_id: str) -> None:
+        self.locations.append(chat_id)
 
     def create_payment_request(self, amount_cents: int, description: str, metadata: dict) -> PaymentRequest:
         self.payments.append({"amount": amount_cents, "description": description, "metadata": metadata})
@@ -82,3 +86,10 @@ def create_payment_request(amount_cents: int, description: str, metadata: dict) 
         },
     )
     return PaymentRequest(id=str(data["id"]), checkout_url=str(data["checkout_url"]))
+
+
+def request_location(chat_id: str) -> None:
+    if _gateway is not None:
+        _gateway.request_location(chat_id)
+        return
+    _live_post(f"/chats/{chat_id}/location/request", {})

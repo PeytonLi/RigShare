@@ -7,9 +7,12 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.clerk import can_lender_settle
 from app.commands import CommandKind, parse_command
 from app.config import get_settings
-from app.linq_client import create_payment_request, send_link, send_text
+from app.ingest import enrich_command
+from app.linq_client import create_payment_request, request_location, send_link, send_text
+from app.workflows_client import start_task
 from app.linq_webhook import (
     event_id,
     event_type,
@@ -67,8 +70,11 @@ def handle_inbound(session: Session, event: dict) -> None:
         return
 
     user = get_or_create_user(session, phone)
-    cmd = parse_command(text)
+    cmd = enrich_command(text, parse_command(text))
     media = inbound_media_ids(event)
+    if cmd.kind == "UNSAFE":
+        send_text(chat_id, "Can't help with that. If you need a cable, text NEED HDMI / USB-C / LIGHTNING.")
+        return
     settings = get_settings()
     is_lender = phone == settings.lender_phone
 
@@ -88,6 +94,7 @@ def handle_inbound(session: Session, event: dict) -> None:
             rental_cents=money.rental_cents,
             platform_fee_cents=money.platform_fee_cents,
             outbound_media_id=media[0] if media else None,
+            lender_chat_id=chat_id,
         )
         session.add(item)
         session.flush()
@@ -118,6 +125,7 @@ def handle_inbound(session: Session, event: dict) -> None:
             lender_user_id=item.lender_user_id,
             state="awaiting_deposit",
             borrower_chat_id=chat_id,
+            lender_chat_id=item.lender_chat_id,
             deposit_cents=item.deposit_cents,
             rental_cents=item.rental_cents,
             platform_fee_cents=item.platform_fee_cents,
@@ -141,6 +149,7 @@ def handle_inbound(session: Session, event: dict) -> None:
             f"{_dollars(refund)} refunded.",
         )
         send_link(chat_id, pay.checkout_url)
+        start_task("quoteAndCharge", loan.id)
         return
 
     if cmd.kind == CommandKind.GOT_IT:
@@ -154,13 +163,14 @@ def handle_inbound(session: Session, event: dict) -> None:
         if user.id == loan.lender_user_id:
             loan.lender_got_it_at = _now()
             loan.lender_chat_id = chat_id
-        if loan.borrower_got_it_at and loan.lender_got_it_at and loan.state == "walking":
-            loan.state = "out"
-            loan.return_by_at = _now() + timedelta(hours=2)
+        if _try_hand_off(loan):
             send_text(chat_id, "You have it. Return by 2 hours. Photo the orange tape and reply RETURNING.")
             other = loan.lender_chat_id if user.id == loan.borrower_user_id else loan.borrower_chat_id
             if other and other != chat_id:
                 send_text(other, "Both said GOT IT. Loan is out.")
+            start_task("onHandoff", loan.id)
+        elif loan.state == "awaiting_deposit":
+            send_text(chat_id, "GOT IT noted. Waiting on the deposit to clear.")
         else:
             send_text(chat_id, "GOT IT noted. Waiting on the other person.")
         return
@@ -170,11 +180,15 @@ def handle_inbound(session: Session, event: dict) -> None:
         if loan is None:
             send_text(chat_id, "No active loan to return.")
             return
+        if loan.state not in {"out", "returning"}:
+            send_text(chat_id, "That loan is not out yet. Both sides reply GOT IT first.")
+            return
         loan.state = "returning"
         send_text(
             chat_id,
             f"Return photo in. Lender: reply SETTLE {loan.id} if it matches (orange tape).",
         )
+        start_task("inspectReturn", loan.id)
         return
 
     if cmd.kind == CommandKind.SETTLE:
@@ -189,7 +203,11 @@ def handle_inbound(session: Session, event: dict) -> None:
         if loan is None:
             send_text(chat_id, "No loan to settle.")
             return
+        if not can_lender_settle(loan):
+            send_text(chat_id, "Clerk has to SETTLE this one in Band first.")
+            return
         _settle(session, loan, chat_id)
+        start_task("settle", loan.id)
         return
 
     if cmd.kind == CommandKind.CANCEL:
@@ -227,6 +245,11 @@ def handle_payment_succeeded(session: Session, event: dict) -> None:
     if not loan.stripe_payment_intent_id and pi:
         loan.stripe_payment_intent_id = str(pi)
     if loan.state == "awaiting_deposit":
+        # PRD 6: `walking` without a payment intent is an illegal transition. No PI
+        # means no refund is possible later, so hold the loan instead of advancing.
+        if not loan.stripe_payment_intent_id:
+            log.error("payment.succeeded without payment_intent_id loan=%s", loan.id)
+            return
         loan.state = "walking"
         item = session.get(Item, loan.item_id)
         if item is not None:
@@ -236,6 +259,31 @@ def handle_payment_succeeded(session: Session, event: dict) -> None:
                 loan.borrower_chat_id,
                 "Paid. Meet the lender. When you are holding it, reply GOT IT.",
             )
+            request_location(loan.borrower_chat_id)
+        if loan.lender_chat_id:
+            send_text(
+                loan.lender_chat_id,
+                "Deposit paid. Hand the item over. When they have it, reply GOT IT.",
+            )
+            request_location(loan.lender_chat_id)
+        start_task("onDepositPaid", loan.id)
+        # Either side may have said GOT IT before the webhook landed.
+        if _try_hand_off(loan):
+            for chat in (loan.borrower_chat_id, loan.lender_chat_id):
+                if chat:
+                    send_text(chat, "Both said GOT IT. Loan is out.")
+            start_task("onHandoff", loan.id)
+
+
+def _try_hand_off(loan: Loan) -> bool:
+    """Promote walking -> out once both sides have said GOT IT. Idempotent."""
+    if loan.state != "walking":
+        return False
+    if not (loan.borrower_got_it_at and loan.lender_got_it_at):
+        return False
+    loan.state = "out"
+    loan.return_by_at = _now() + timedelta(hours=2)
+    return True
 
 
 def _settle(session: Session, loan: Loan, chat_id: str) -> None:

@@ -10,6 +10,13 @@ os.environ["PUBLIC_BASE_URL"] = "https://rigshare.onrender.com"
 os.environ["LENDER_PHONE"] = "+14159909839"
 os.environ["TEST_BORROWER_PHONE"] = "+17034051525"
 os.environ["INTERNAL_SETTLE_SECRET"] = "test-settle"
+os.environ["REQUIRE_CLERK_SETTLE"] = "false"
+os.environ["DEFAULT_DEPOSIT_CENTS"] = "2500"
+os.environ["DEFAULT_RENTAL_CENTS"] = "500"
+os.environ["DEFAULT_PLATFORM_FEE_CENTS"] = "200"
+os.environ["DEMO_DEPOSIT_CENTS"] = "800"
+os.environ["DEMO_RENTAL_CENTS"] = "200"
+os.environ["DEMO_PLATFORM_FEE_CENTS"] = "100"
 
 from tests.helpers import TEST_WEBHOOK_SECRET
 
@@ -22,6 +29,15 @@ from app.config import get_settings
 from app.linq_client import FakeLinq, set_linq_gateway
 
 get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _clear_settings_cache():
+    """monkeypatch restores env vars but not the lru_cache built from them, so a
+    test that flips REQUIRE_CLERK_SETTLE leaks its Settings into every later test.
+    """
+    yield
+    get_settings.cache_clear()
 
 
 @pytest.fixture(autouse=True)

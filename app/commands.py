@@ -55,8 +55,13 @@ class ParsedCommand:
     raw: str
 
 
+# People text "Got it!" and "returning!". Without this every such message parses
+# as UNKNOWN and the loan silently stalls. Hyphens stay -- "usb-c" needs them.
+_PUNCTUATION = str.maketrans("", "", "!.,?;:'\"")
+
+
 def _normalize(text: str) -> str:
-    return " ".join(text.strip().split())
+    return " ".join(text.translate(_PUNCTUATION).strip().split())
 
 
 def parse_command(text: str) -> ParsedCommand:
