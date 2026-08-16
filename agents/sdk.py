@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -45,6 +46,43 @@ def load_band_stack() -> tuple[Any, Any, Any, Any]:
         ) from exc
 
     return Agent, LangGraphAdapter, ChatOpenAI, InMemorySaver
+
+
+async def start_band_agent(
+    *,
+    name: str,
+    agent_id: str,
+    api_key: str,
+    custom_section: str,
+    additional_tools: list | None,
+    decoder_model: str,
+    pioneer_api_key: str,
+) -> None:
+    """Build the adapter, create the Band client off the event loop, then listen.
+
+    Agent.create is sync and talks to Band. Calling it from three gathered
+    coroutines can deadlock the loop, which is why logs never reached
+    'starting Band agent'.
+    """
+    Agent, LangGraphAdapter, ChatOpenAI, InMemorySaver = load_band_stack()
+    log.info("%s: building adapter", name)
+    llm = ChatOpenAI(
+        model=decoder_model,
+        base_url="https://api.pioneer.ai/v1",
+        api_key=pioneer_api_key,
+    )
+    adapter = LangGraphAdapter(
+        llm=llm,
+        checkpointer=InMemorySaver(),
+        custom_section=custom_section,
+        additional_tools=additional_tools or None,
+    )
+    log.info("%s: Agent.create %s", name, agent_id)
+    agent = await asyncio.to_thread(
+        lambda: Agent.create(adapter=adapter, agent_id=agent_id, api_key=api_key)
+    )
+    log.info("%s: starting Band agent %s", name, agent_id)
+    await agent.run()
 
 
 def tool_decorator():

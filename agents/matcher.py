@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 
+from agents.sdk import start_band_agent
 from agents.tools import matcher_tools
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ def _decoder_model(settings) -> str:
 
 async def run() -> None:
     from app.config import get_settings
+    from app.product import matcher_brief
 
     settings = get_settings()
     agent_id = settings.band_matcher_agent_id
@@ -45,33 +47,12 @@ async def run() -> None:
         logger.warning("matcher: PIONEER_API_KEY missing; skipping")
         return
 
-    try:
-        from agents.sdk import load_band_stack
-
-        Agent, LangGraphAdapter, ChatOpenAI, InMemorySaver = load_band_stack()
-    except ImportError:
-        logger.exception("matcher: band-sdk stack not installed")
-        return
-
-    additional_tools = matcher_tools()
-    from app.product import matcher_brief
-
-    llm = ChatOpenAI(
-        model=_decoder_model(settings),
-        base_url="https://api.pioneer.ai/v1",
-        api_key=settings.pioneer_api_key,
-    )
-    adapter = LangGraphAdapter(
-        llm=llm,
-        checkpointer=InMemorySaver(),
-        custom_section=_CUSTOM_SECTION + "\n" + matcher_brief(),
-        additional_tools=additional_tools or None,
-    )
-    agent = Agent.create(
-        adapter=adapter,
+    await start_band_agent(
+        name="matcher",
         agent_id=agent_id,
         api_key=api_key,
+        custom_section=_CUSTOM_SECTION + "\n" + matcher_brief(),
+        additional_tools=matcher_tools(),
+        decoder_model=_decoder_model(settings),
+        pioneer_api_key=settings.pioneer_api_key,
     )
-
-    logger.info("matcher: starting Band agent %s", agent_id)
-    await agent.run()

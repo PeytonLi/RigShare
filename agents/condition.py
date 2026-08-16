@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 
+from agents.sdk import start_band_agent
 from agents.tools import condition_tools
 
 logger = logging.getLogger(__name__)
@@ -44,31 +45,12 @@ async def run() -> None:
         logger.warning("condition: PIONEER_API_KEY missing; skipping")
         return
 
-    try:
-        from agents.sdk import load_band_stack
-
-        Agent, LangGraphAdapter, ChatOpenAI, InMemorySaver = load_band_stack()
-    except ImportError:
-        logger.exception("condition: band-sdk stack not installed")
-        return
-
-    additional_tools = condition_tools()
-    llm = ChatOpenAI(
-        model=_decoder_model(settings),
-        base_url="https://api.pioneer.ai/v1",
-        api_key=settings.pioneer_api_key,
-    )
-    adapter = LangGraphAdapter(
-        llm=llm,
-        checkpointer=InMemorySaver(),
-        custom_section=_CUSTOM_SECTION,
-        additional_tools=additional_tools or None,
-    )
-    agent = Agent.create(
-        adapter=adapter,
+    await start_band_agent(
+        name="condition",
         agent_id=agent_id,
         api_key=api_key,
+        custom_section=_CUSTOM_SECTION,
+        additional_tools=condition_tools(),
+        decoder_model=_decoder_model(settings),
+        pioneer_api_key=settings.pioneer_api_key,
     )
-
-    logger.info("condition: starting Band agent %s", agent_id)
-    await agent.run()
