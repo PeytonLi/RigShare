@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from app.config import get_settings
+
+log = logging.getLogger("rigshare")
 
 LINQ_API_BASE = "https://api.linqapp.com/api/partner/v3"
 
@@ -138,10 +141,33 @@ def request_location(chat_id: str) -> None:
     _live_post(f"/chats/{chat_id}/location/request", {})
 
 
-def download_media(media_id: str) -> bytes:
+def fetch_media(media_id: str) -> tuple[bytes, str]:
+    """Bytes + MIME type. Linq serves photos via GET /attachments/{id} → download_url."""
     if _gateway is not None:
-        return _gateway.download_media(media_id)
-    return _live_get(f"/media/{media_id}").content
+        return _gateway.download_media(media_id), "image/jpeg"
+
+    try:
+        meta = _live_get(f"/attachments/{media_id}").json() or {}
+        if isinstance(meta.get("data"), dict):
+            meta = meta["data"]
+        url = meta.get("download_url") or meta.get("url")
+        ctype = str(meta.get("content_type") or meta.get("mime_type") or "image/jpeg")
+        if url:
+            import httpx
+
+            response = httpx.get(url, timeout=20.0, follow_redirects=True)
+            response.raise_for_status()
+            return response.content, ctype
+    except Exception:
+        log.exception("linq attachments retrieve failed for %s", media_id)
+
+    response = _live_get(f"/media/{media_id}")
+    header = response.headers.get("content-type") or "image/jpeg"
+    return response.content, header.split(";", 1)[0].strip()
+
+
+def download_media(media_id: str) -> bytes:
+    return fetch_media(media_id)[0]
 
 
 def get_location(chat_id: str) -> tuple[float, float] | None:

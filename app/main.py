@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from hashlib import sha256
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
@@ -103,9 +104,35 @@ def _dashboard_context() -> dict:
     }
 
 
+def board_rev(db: Session) -> str:
+    """Cheap fingerprint of what the dashboard shows. /live polls this."""
+    loans = db.execute(
+        select(
+            Loan.id,
+            Loan.state,
+            Loan.updated_at,
+            Loan.stripe_payment_intent_id,
+            Loan.stripe_refund_id,
+            Loan.return_media_id,
+            Loan.compare_metric,
+            Loan.condition_verdict,
+        ).order_by(Loan.created_at.desc())
+    ).all()
+    items = db.execute(
+        select(Item.id, Item.status, Item.outbound_media_id).order_by(Item.created_at.desc())
+    ).all()
+    payload = [tuple("" if col is None else str(col) for col in row) for row in (*loans, *items)]
+    return sha256(repr(payload).encode()).hexdigest()[:16]
+
+
 @app.get("/health")
 def health() -> dict:
     return {"ok": True, "service": "rigshare"}
+
+
+@app.get("/live")
+def live(db: Session = Depends(get_db)) -> dict:
+    return {"ok": True, "rev": board_rev(db)}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -337,9 +364,15 @@ async def internal_clerk_forfeit(request: Request, db: Session = Depends(get_db)
 def media(media_id: str, s: str | None = None):
     from fastapi.responses import Response
 
-    from app.linq_client import download_media
+    from app.linq_client import fetch_media
     from app.media import media_signature_ok
 
     if not media_signature_ok(media_id, s):
         return JSONResponse({"error": "bad or missing signature"}, status_code=401)
-    return Response(content=download_media(media_id), media_type="image/jpeg")
+    try:
+        body, content_type = fetch_media(media_id)
+    except Exception:
+        return JSONResponse({"error": "media fetch failed"}, status_code=502)
+    if not content_type.startswith("image/"):
+        content_type = "image/jpeg"
+    return Response(content=body, media_type=content_type)

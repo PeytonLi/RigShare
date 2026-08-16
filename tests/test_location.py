@@ -57,6 +57,43 @@ def loan(db):
     return loan
 
 
+def test_download_media_follows_attachment_download_url(monkeypatch):
+    from app import linq_client
+
+    linq_client.set_linq_gateway(None)
+
+    class Resp:
+        def __init__(self, *, json_data=None, content=b"", headers=None):
+            self._json = json_data
+            self.content = content
+            self.headers = headers or {}
+
+        def json(self):
+            return self._json
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, **kwargs):
+        if url.endswith("/attachments/att-1"):
+            return Resp(
+                json_data={
+                    "id": "att-1",
+                    "content_type": "image/png",
+                    "download_url": "https://cdn.linqapp.com/att-1.png",
+                }
+            )
+        if url == "https://cdn.linqapp.com/att-1.png":
+            return Resp(content=b"png-bytes")
+        raise AssertionError(url)
+
+    monkeypatch.setattr("httpx.get", fake_get)
+    body, ctype = linq_client.fetch_media("att-1")
+    assert body == b"png-bytes"
+    assert ctype == "image/png"
+    assert linq_client.download_media("att-1") == b"png-bytes"
+
+
 def test_fake_gateway_supports_media_and_location(_fake_linq):
     _fake_linq.media["media_1"] = b"jpeg"
     _fake_linq.chat_locations["chat_b"] = (37.7749, -122.4194)

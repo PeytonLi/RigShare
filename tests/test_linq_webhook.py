@@ -95,6 +95,23 @@ def test_parse_message_received_2025_01_01_shape() -> None:
     assert inbound_media_ids(event) == ["media_1", "media_2"]
 
 
+def test_inbound_media_uses_id_not_cdn_url() -> None:
+    payload = message_received_payload(text="here it is")
+    payload["data"]["parts"] = [
+        {"type": "text", "value": "here it is"},
+        {
+            "filename": "photo.jpg",
+            "id": "f13dda7d-ecac-49eb-b3fe-16fe286abf19",
+            "mime_type": "image/jpeg",
+            "type": "media",
+            "url": "https://cdn.linqapp.com/attachments/a1b2c3d4/photo.jpg?signature=x",
+        },
+    ]
+    assert inbound_media_ids(parse_event(dumps(payload))) == [
+        "f13dda7d-ecac-49eb-b3fe-16fe286abf19"
+    ]
+
+
 def test_verify_accepts_mixed_case_headers() -> None:
     body = dumps(message_received_payload())
     headers = sign_linq_body(body)

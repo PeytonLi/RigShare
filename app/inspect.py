@@ -10,6 +10,7 @@ from app.band_client import create_loan_room, post_room_message
 from app.catalog import load_weights
 from app.config import get_settings
 from app.disputes import dispute_url
+from app.media import media_url
 from app.models import Item, Loan
 from app.superserve_client import inspect_outbound, inspect_return, is_blocked
 from app.terac_client import approve_submission, list_submissions, open_dispute
@@ -105,8 +106,8 @@ def run_inspect_return(session: Session, loan_id: str) -> dict:
         out_url = ""
         item = session.get(Item, loan.item_id)
         if item is not None and item.outbound_media_id:
-            out_url = f"{base}/media/{item.outbound_media_id}"
-        ret_url = f"{base}/media/{loan.return_media_id}" if loan.return_media_id else ""
+            out_url = f"{base}{media_url(item.outbound_media_id)}"
+        ret_url = f"{base}{media_url(loan.return_media_id)}" if loan.return_media_id else ""
         post_room_message(
             loan.band_room_id,
             f"Inspect loan_id={loan.id} compare_metric={metric} recommended={recommended}. "

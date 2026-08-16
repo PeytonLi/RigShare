@@ -85,6 +85,30 @@ def test_inspect_blocks_huge_metric(db: Session, _fake_linq) -> None:
     assert not any("doesn't match" in text for _, text in _fake_linq.texts)
 
 
+def test_inspect_posts_signed_photo_urls(db: Session, _fake_linq, monkeypatch) -> None:
+    from app.media import media_url
+
+    loan = _loan(db)
+    loan.band_room_id = "room_inspect"
+    db.commit()
+    posted: list[str] = []
+    monkeypatch.setattr(
+        "app.inspect.post_room_message",
+        lambda room_id, text, **kwargs: posted.append(text),
+    )
+    fake = FakeSuperserve(metric=100)
+    set_superserve_gateway(fake)
+    try:
+        run_inspect_return(db, loan.id)
+        db.commit()
+    finally:
+        set_superserve_gateway(None)
+
+    assert posted
+    assert media_url("m_out") in posted[0]
+    assert media_url("m_back") in posted[0]
+
+
 def test_inspect_skips_without_sandbox(db: Session) -> None:
     loan = _loan(db, outbound=None, ret=None)
     set_superserve_gateway(None)

@@ -17,6 +17,36 @@ def test_home_lists_empty(client):
     response = client.get("/")
     assert response.status_code == 200
     assert b"RigShare" in response.content
+    assert b"live.js" in response.content
+    assert b'id="live-chip"' in response.content
+
+
+def test_live_rev_moves_when_inventory_does(client, db):
+    first = client.get("/live")
+    assert first.status_code == 200
+    assert first.json()["ok"] is True
+    rev = first.json()["rev"]
+    assert rev
+
+    from app.models import Item, User
+
+    user = User(phone="+14159909839")
+    db.add(user)
+    db.flush()
+    db.add(
+        Item(
+            id="item_live",
+            sku="hdmi",
+            title="hdmi",
+            lender_user_id=user.id,
+            status="listed",
+            deposit_cents=1500,
+            rental_cents=300,
+            platform_fee_cents=200,
+        )
+    )
+    db.commit()
+    assert client.get("/live").json()["rev"] != rev
 
 
 def test_webhook_rejects_bad_signature(client):

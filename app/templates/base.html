@@ -18,16 +18,20 @@
         <span class="mark">R</span>
         RigShare
       </a>
-      <span class="status-chip {{ 'pass' if money_status == 'pass' else ('warn' if money_status == 'warn' else 'fail') }}">
+      <span class="status-chip {{ 'pass' if money_status == 'pass' else ('warn' if money_status == 'warn' else 'fail') }}" data-sync>
         <span class="dot"></span>
         money: {{ money_status }}
       </span>
+      <span id="live-chip" class="status-chip warn" title="waiting for first check">
+        <span class="dot"></span>
+        <span data-live-label>connecting</span>
+      </span>
       <div class="spacer"></div>
-      <span class="status-chip">
+      <span class="status-chip" data-sync>
         <span class="dot"></span>
         {{ from_number }}
       </span>
-      <span class="status-chip"><span class="dot"></span>vendors {{ ok_count }}/{{ vendor_count }}</span>
+      <span class="status-chip" data-sync><span class="dot"></span>vendors {{ ok_count }}/{{ vendor_count }}</span>
       <a class="status-chip" href="/health">/health</a>
     </header>
 
@@ -38,5 +42,6 @@
     <footer>
       RigShare · text a number · borrow gear · pay a hold · bring it back · get most of it back
     </footer>
+    <script src="/static/live.js" defer></script>
   </body>
 </html>
