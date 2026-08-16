@@ -55,6 +55,12 @@ def _parse_body(raw: bytes) -> dict[str, list[str]]:
     return parse_qs(raw.decode())
 
 
+@router.get("/survey/results")
+def survey_results(db: Session = Depends(get_db)) -> dict:
+    """Read-only tally for the operator. Same numbers the desks show."""
+    return tally(db)
+
+
 @router.get("/survey", response_class=HTMLResponse)
 def survey_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     ids = _terac_ids(request)
