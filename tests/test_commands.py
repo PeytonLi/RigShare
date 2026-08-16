@@ -47,6 +47,9 @@ def test_exact_commands(text: str, expected: ParsedCommand) -> None:
     [
         ("NEED USB-C", "usbc_charger"),
         ("NEED USBC", "usbc_charger"),
+        ("usbc", "usbc_charger"),
+        ("USBC", "usbc_charger"),
+        ("he's needing usbc", "usbc_charger"),
         ("NEED USB C", "usbc_charger"),
         ("NEED USB - C", "usbc_charger"),
         ("NEED USB- C", "usbc_charger"),

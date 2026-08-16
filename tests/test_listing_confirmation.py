@@ -81,3 +81,12 @@ def test_need_usb_c_with_space_or_dash_matches_listed_charger(db, _fake_linq):
     loan = db.execute(select(Loan)).scalars().one()
     assert loan.state == "matching"
     assert any("usbc charger" in text for _, text in _fake_linq.texts)
+
+
+def test_bare_usbc_matches_listed_charger(db, _fake_linq):
+    handle_inbound(db, _message("LEND USBC", LENDER, "chat_lender", "e_lend"))
+    handle_inbound(db, _message("YES", LENDER, "chat_lender", "e_yes"))
+    handle_inbound(db, _message("usbc", BORROWER, "chat_b1", "e_need_usbc"))
+    db.flush()
+    assert db.execute(select(Item)).scalars().one().sku == "usbc_charger"
+    assert db.execute(select(Loan)).scalars().one().state == "matching"

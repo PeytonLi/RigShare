@@ -159,4 +159,11 @@ def parse_command(text: str) -> ParsedCommand:
         if sku is not None:
             return ParsedCommand(kind=CommandKind.NEED, sku=sku, loan_id=None, raw=raw)
 
+    # "usbc" / "USB-C" / "usb c" with no NEED prefix is still a borrow.
+    folded = _fold_usbc(lower) if _fold_usbc is not None else lower
+    if folded == "usbc":
+        sku = _parse_need_sku(lower)
+        if sku is not None:
+            return ParsedCommand(kind=CommandKind.NEED, sku=sku, loan_id=None, raw=raw)
+
     return ParsedCommand(kind=CommandKind.UNKNOWN, sku=None, loan_id=None, raw=raw)

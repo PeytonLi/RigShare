@@ -96,6 +96,7 @@ class TestSkus:
         [
             ("usb-c", "usbc_charger"),
             ("usbc", "usbc_charger"),
+            ("USBC", "usbc_charger"),
             ("usb c", "usbc_charger"),
             ("usb - c", "usbc_charger"),
             ("usb- c", "usbc_charger"),
