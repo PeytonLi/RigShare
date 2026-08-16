@@ -121,6 +121,15 @@ def pick_item(
         )
         if loan.borrower_chat_id:
             send_link(loan.borrower_chat_id, pay.checkout_url)
+            from app.replies import render
+
+            _say(
+                loan.borrower_chat_id,
+                render("need_pay_now"),
+                "need_pay_now",
+                {},
+                loan,
+            )
     return loan
 
 

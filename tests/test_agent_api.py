@@ -102,6 +102,7 @@ def test_pick_item_reserves_and_sends_checkout(db: Session, _fake_linq) -> None:
     assert loan.matcher_source == "agent"
     assert loan.linq_payment_request_id
     assert _fake_linq.links[-1][1] == "https://zero.linqapp.com/pay/test"
+    assert any("reply PAID" in text for _, text in _fake_linq.texts)
 
 
 def test_pick_item_is_idempotent(db: Session, _fake_linq) -> None:
@@ -170,10 +171,9 @@ def test_inspect_then_hire_opens_terac(db: Session, _fake_linq) -> None:
         run_inspect_return(db, loan.id)
         db.commit()
         db.refresh(loan)
-        assert loan.state == "inspecting"
+        assert loan.state == "blocked"
+        assert loan.condition_verdict == "BLOCKED"
         assert loan.terac_opportunity_id is None
-        apply_condition_verdict(db, loan.id, "BLOCKED", "evt_block")
-        db.commit()
         hired = hire_inspector(db, loan.id, "evt_hire")
         db.commit()
     finally:

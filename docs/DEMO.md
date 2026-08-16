@@ -58,8 +58,10 @@ starts `quoteAndCharge`. Matcher is @mentioned in Band `loan-<id>` to
 `pick_item`. If Matcher does not pick within `matcher_wait_seconds` (default
 20), the task times out and picks with `source=timeout`.
 
-After Matcher or timeout reserves the item, two messages go out — the second
-is a tappable link:
+After Matcher or timeout reserves the item, three messages go out — quote, a
+tappable pay link, then:
+
+> Pay that link. When it clears, reply PAID.
 
 > hdmi nearby, marked with orange tape. $0.50 hold now. $0 to the lender if you bring it back. $0 RigShare fee. $0.50 refunded.
 
@@ -72,7 +74,8 @@ or `timeout`), `matched_at`. Item is now `reserved`, loan `awaiting_deposit`.
 
 ## 2. Judge pays (45 s)
 
-They tap the link, Apple Pay, done.
+They tap the link, Apple Pay, then reply **`PAID`**. If the pay webhook is
+quiet, that is what unsticks the loan.
 
 Borrower gets:
 > Paid. Meet the lender. When you are holding it, reply GOT IT.
