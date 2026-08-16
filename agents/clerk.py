@@ -44,12 +44,11 @@ async def run() -> None:
         return
 
     try:
-        from band_sdk.agent import Agent
-        from band_sdk.adapter.langgraph import LangGraphAdapter
-        from langchain_openai import ChatOpenAI
-        from langgraph.checkpoint.memory import InMemorySaver
+        from agents.sdk import load_band_stack
+
+        Agent, LangGraphAdapter, ChatOpenAI, InMemorySaver = load_band_stack()
     except ImportError:
-        logger.warning("clerk: band-sdk stack not installed; skipping")
+        logger.exception("clerk: band-sdk stack not installed")
         return
 
     additional_tools = clerk_tools()

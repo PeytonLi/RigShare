@@ -66,14 +66,9 @@ def clerk_forfeit(loan_id: str, event_id: str) -> str:
 
 
 def _tool_decorator():
-    try:
-        from band_sdk.types import tool
-    except ImportError:
-        try:
-            from langchain_core.tools import tool
-        except ImportError:
-            return None
-    return tool
+    from agents.sdk import tool_decorator
+
+    return tool_decorator()
 
 
 def matcher_tools() -> list:
