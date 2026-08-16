@@ -112,6 +112,19 @@ def test_inbound_media_uses_id_not_cdn_url() -> None:
     ]
 
 
+def test_inbound_media_reads_attachment_id() -> None:
+    payload = message_received_payload(text="")
+    payload["data"]["parts"] = [
+        {
+            "type": "media",
+            "attachment_id": "att-uuid-1",
+            "mime_type": "image/jpeg",
+            "url": "https://cdn.linqapp.com/attachments/att-uuid-1/photo.jpg",
+        }
+    ]
+    assert inbound_media_ids(parse_event(dumps(payload))) == ["att-uuid-1"]
+
+
 def test_verify_accepts_mixed_case_headers() -> None:
     body = dumps(message_received_payload())
     headers = sign_linq_body(body)

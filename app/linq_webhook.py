@@ -85,14 +85,22 @@ def inbound_from_phone(event: dict) -> str | None:
     return str(phone) if phone is not None else None
 
 
+_MEDIA_TYPES = {"media", "image", "attachment"}
+
+
 def inbound_media_ids(event: dict) -> list[str]:
     media_ids: list[str] = []
     for part in _parts(event):
-        if part.get("type") != "media":
+        ptype = str(part.get("type") or "")
+        looks_like_file = part.get("url") or part.get("mime_type") or part.get("filename")
+        if ptype not in _MEDIA_TYPES and not looks_like_file:
             continue
-        media_id = part.get("id") or part.get("value")
-        if media_id is not None:
-            media_ids.append(str(media_id))
+        if ptype in {"text", "link", "location"}:
+            continue
+        media_id = part.get("id") or part.get("attachment_id") or part.get("value")
+        if media_id is None or str(media_id).startswith("http"):
+            continue
+        media_ids.append(str(media_id))
     return media_ids
 
 

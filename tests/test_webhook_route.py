@@ -13,6 +13,52 @@ def test_health(client):
     assert response.json() == {"ok": True, "service": "rigshare"}
 
 
+def test_home_recovers_photos_from_stored_webhooks(client, db):
+    from app.models import User, record_event
+    from tests.helpers import message_received_payload
+
+    lender = User(phone="+14159909839")
+    borrower = User(phone="+17034051525")
+    db.add_all([lender, borrower])
+    db.flush()
+    item = Item(
+        id="item_photo",
+        sku="hdmi",
+        title="hdmi",
+        lender_user_id=lender.id,
+        status="out",
+        deposit_cents=1500,
+        rental_cents=300,
+        platform_fee_cents=200,
+    )
+    loan = Loan(
+        id="loan_photo",
+        item_id=item.id,
+        borrower_user_id=borrower.id,
+        lender_user_id=lender.id,
+        state="returning",
+        deposit_cents=1500,
+        rental_cents=300,
+        platform_fee_cents=200,
+    )
+    db.add_all([item, loan])
+    out = message_received_payload(text="", chat_id="chat_l", from_phone=lender.phone, event_id="evt_out")
+    out["data"]["parts"] = [{"type": "media", "id": "media_out", "mime_type": "image/jpeg"}]
+    back = message_received_payload(text="", chat_id="chat_b", from_phone=borrower.phone, event_id="evt_back")
+    back["data"]["parts"] = [{"type": "media", "attachment_id": "media_back", "mime_type": "image/jpeg"}]
+    record_event(db, "evt_out", "message.received", out)
+    record_event(db, "evt_back", "message.received", back)
+    db.commit()
+
+    page = client.get("/")
+    assert page.status_code == 200
+    db.expire_all()
+    assert db.get(Item, "item_photo").outbound_media_id == "media_out"
+    assert db.get(Loan, "loan_photo").return_media_id == "media_back"
+    assert b"/media/media_out" in page.content
+    assert b"/media/media_back" in page.content
+
+
 def test_home_lists_empty(client):
     response = client.get("/")
     assert response.status_code == 200

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -33,7 +34,8 @@ from app.linq_webhook import (
     inbound_media_ids,
     inbound_text,
 )
-from app.models import Item, Loan, get_or_create_user
+from app.models import Item, Loan, ProcessedEvent, User, get_or_create_user
+from app.replies import render
 from app.skus import SKUS, resolve_sku
 
 log = logging.getLogger("rigshare")
@@ -61,11 +63,90 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _say(chat_id: str, fallback: str, template_key: str, slots: dict | None = None, loan: Loan | None = None) -> None:
-    text, source = compose_reply(template_key, fallback, slots)
+def _say(chat_id: str, key: str, *, loan: Loan | None = None, **slots: object) -> None:
+    """Send one reply. The registry template is the fallback; Pioneer rewrites it.
+
+    Copy lives in app/replies.py, never inline here -- see that module for why.
+    """
+    fallback = render(key, **slots)
+    text, source = compose_reply(key, fallback, slots)
     send_text(chat_id, text)
     if loan is not None:
         loan.copy_source = source
+
+
+def _photo_id(user, media: list[str]) -> str | None:
+    return media[0] if media else user.last_media_id
+
+
+def _attach_loose_photo(session: Session, user, media_id: str) -> bool:
+    """A photo often arrives as its own iMessage, then LEND / RETURNING follows."""
+    item = session.execute(
+        select(Item)
+        .where(
+            Item.lender_user_id == user.id,
+            Item.outbound_media_id.is_(None),
+            Item.status.in_(("pending", "listed", "reserved", "out")),
+        )
+        .order_by(Item.created_at.desc())
+    ).scalars().first()
+    if item is not None:
+        item.outbound_media_id = media_id
+        return True
+    loan = session.execute(
+        select(Loan)
+        .where(
+            Loan.borrower_user_id == user.id,
+            Loan.return_media_id.is_(None),
+            Loan.state.in_(
+                ("out", "returning", "inspecting", "settling", "blocked", "closed")
+            ),
+        )
+        .order_by(Loan.created_at.desc())
+    ).scalars().first()
+    if loan is not None:
+        loan.return_media_id = media_id
+        return True
+    return False
+
+
+def recover_photos_from_events(session: Session) -> bool:
+    """Fill blank outbound/return ids from stored Linq webhooks (split photo texts)."""
+    items = session.execute(select(Item).where(Item.outbound_media_id.is_(None))).scalars().all()
+    loans = session.execute(select(Loan).where(Loan.return_media_id.is_(None))).scalars().all()
+    if not items and not loans:
+        return False
+    by_phone: dict[str, list[str]] = {}
+    rows = session.execute(
+        select(ProcessedEvent)
+        .where(ProcessedEvent.event_type == "message.received")
+        .order_by(ProcessedEvent.created_at.desc())
+    ).scalars().all()
+    for row in rows:
+        try:
+            payload = json.loads(row.payload_json)
+        except json.JSONDecodeError:
+            continue
+        phone = inbound_from_phone(payload)
+        ids = inbound_media_ids(payload)
+        if not phone or not ids:
+            continue
+        by_phone.setdefault(phone, []).extend(ids)
+    changed = False
+    users = {u.id: u for u in session.execute(select(User)).scalars().all()}
+    for item in items:
+        lender = users.get(item.lender_user_id)
+        found = by_phone.get(lender.phone) if lender is not None else None
+        if found:
+            item.outbound_media_id = found[0]
+            changed = True
+    for loan in loans:
+        borrower = users.get(loan.borrower_user_id)
+        found = by_phone.get(borrower.phone) if borrower is not None else None
+        if found:
+            loan.return_media_id = found[0]
+            changed = True
+    return changed
 
 
 def handle_linq_event(session: Session, event: dict) -> None:
@@ -110,7 +191,7 @@ def handle_location_sharing(session: Session, event: dict) -> None:
     if not other or other == chat_id:
         return
     lat, lng = point
-    send_text(other, f"They're on the way: https://maps.google.com/?q={lat},{lng}")
+    _say(other, "location_ping", maps_url=f"https://maps.google.com/?q={lat},{lng}")
 
 
 def handle_inbound(session: Session, event: dict) -> None:
@@ -122,10 +203,15 @@ def handle_inbound(session: Session, event: dict) -> None:
         return
 
     user = get_or_create_user(session, phone)
-    cmd = enrich_command(text, parse_command(text))
     media = inbound_media_ids(event)
+    if media:
+        user.last_media_id = media[0]
+    if not text.strip() and media:
+        _attach_loose_photo(session, user, media[0])
+        return
+    cmd = enrich_command(text, parse_command(text))
     if cmd.kind == "UNSAFE":
-        send_text(chat_id, "Can't help with that. If you need a cable, text NEED HDMI / USB-C / LIGHTNING.")
+        _say(chat_id, "unsafe")
         return
     settings = get_settings()
     is_lender = phone == settings.lender_phone
@@ -144,7 +230,7 @@ def handle_inbound(session: Session, event: dict) -> None:
             record_desk(session, "counsel", decision.message)
             return
         if sku is None:
-            send_text(chat_id, "What are you lending? Reply LEND HDMI, LEND USB-C, or LEND LIGHTNING. Orange tape on it.")
+            _say(chat_id, "lend_no_sku")
             return
         money = decision.money
         assert money is not None
@@ -158,24 +244,18 @@ def handle_inbound(session: Session, event: dict) -> None:
             deposit_cents=money.deposit_cents,
             rental_cents=money.rental_cents,
             platform_fee_cents=money.platform_fee_cents,
-            outbound_media_id=media[0] if media else None,
+            outbound_media_id=_photo_id(user, media),
             lender_chat_id=chat_id,
         )
         session.add(item)
         session.flush()
         _say(
             chat_id,
-            f"Got it. {item.title}, orange tape. {_dollars(money.deposit_cents)} hold. "
-            f"You get {_dollars(money.rental_cents)} when it comes back. "
-            f"Borrower also pays a {_dollars(money.platform_fee_cents)} RigShare fee (not taken from you). "
-            "Reply YES to list it. Mark the item so we can tell it apart.",
             "lend_confirm",
-            {
-                "title": item.title,
-                "deposit": _dollars(money.deposit_cents),
-                "rental": _dollars(money.rental_cents),
-                "fee": _dollars(money.platform_fee_cents),
-            },
+            title=item.title,
+            deposit=_dollars(money.deposit_cents),
+            rental=_dollars(money.rental_cents),
+            fee=_dollars(money.platform_fee_cents),
         )
         return
 
@@ -186,26 +266,28 @@ def handle_inbound(session: Session, event: dict) -> None:
             .order_by(Item.created_at.desc())
         ).scalars().first()
         if item is None:
-            send_text(chat_id, "Nothing waiting to be listed. Text LEND HDMI / USB-C / LIGHTNING with a photo.")
+            _say(chat_id, "yes_nothing_pending")
             return
         item.status = "listed"
         item.lender_chat_id = chat_id
-        send_text(
+        _say(
             chat_id,
-            f"Listed {item.title}. {_dollars(item.deposit_cents)} hold on the borrower. "
-            f"You get {_dollars(item.rental_cents)} when it comes back.",
+            "yes_listed",
+            title=item.title,
+            deposit=_dollars(item.deposit_cents),
+            rental=_dollars(item.rental_cents),
         )
         return
 
     if cmd.kind == CommandKind.NEED:
         sku = cmd.sku
         if sku is None:
-            send_text(chat_id, "What do you need? NEED HDMI, NEED USB-C, or NEED LIGHTNING.")
+            _say(chat_id, "need_no_sku")
             return
         candidates = listed_candidates(session, sku)
         item = candidates[0] if candidates else None
         if item is None:
-            send_text(chat_id, f"Nothing listed for {sku.replace('_', ' ')} yet. Ask someone to LEND.")
+            _say(chat_id, "need_none_listed", sku=sku.replace("_", " "))
             return
         loan = Loan(
             id=uuid.uuid4().hex,
@@ -223,32 +305,23 @@ def handle_inbound(session: Session, event: dict) -> None:
         persist_entities(loan, cmd.entities)
         session.flush()
         label = sku.replace("_", " ")
-        _say(
-            chat_id,
-            f"Looking for a {label} nearby…",
-            "need_matching",
-            {"sku": label, "loan_id": loan.id},
-            loan,
-        )
+        _say(chat_id, "need_matching", loan=loan, sku=label)
         start_task("quoteAndCharge", loan.id)
         return
 
     if cmd.kind == CommandKind.PAID:
         loan = _active_loan_for(session, user.id)
         if loan is None or loan.state != "awaiting_deposit":
-            send_text(chat_id, "No deposit waiting. If you already have the item, reply GOT IT.")
+            _say(chat_id, "paid_none_waiting")
             return
         if not _confirm_payment_from_linq(session, loan):
-            send_text(
-                chat_id,
-                "I don't see the payment yet. Wait 10 seconds and reply PAID again.",
-            )
+            _say(chat_id, "paid_not_seen")
         return
 
     if cmd.kind == CommandKind.GOT_IT:
         loan = _active_loan_for(session, user.id)
         if loan is None:
-            send_text(chat_id, "No active loan. Text NEED HDMI / USB-C / LIGHTNING.")
+            _say(chat_id, "got_it_no_loan")
             return
         if user.id == loan.borrower_user_id:
             loan.borrower_got_it_at = _now()
@@ -257,42 +330,37 @@ def handle_inbound(session: Session, event: dict) -> None:
             loan.lender_got_it_at = _now()
             loan.lender_chat_id = chat_id
         if _try_hand_off(loan):
-            send_text(chat_id, "You have it. Return by 2 hours. Photo the orange tape and reply RETURNING.")
+            _say(chat_id, "handoff_holder")
             other = loan.lender_chat_id if user.id == loan.borrower_user_id else loan.borrower_chat_id
             if other and other != chat_id:
-                send_text(other, "Both said GOT IT. Loan is out.")
+                _say(other, "handoff_other")
             _send_status_link(loan)
             start_task("onHandoff", loan.id)
         elif loan.state == "awaiting_deposit":
-            send_text(chat_id, "GOT IT noted. Waiting on the deposit to clear.")
+            _say(chat_id, "got_it_awaiting_deposit")
         else:
-            send_text(chat_id, "GOT IT noted. Waiting on the other person.")
+            _say(chat_id, "got_it_waiting_other")
         return
 
     if cmd.kind == CommandKind.RETURNING:
         loan = _active_loan_for(session, user.id)
         if loan is None:
-            send_text(chat_id, "No active loan to return.")
+            _say(chat_id, "returning_no_loan")
             return
         if loan.state not in {"out", "returning"}:
-            send_text(chat_id, "That loan is not out yet. Both sides reply GOT IT first.")
+            _say(chat_id, "returning_not_out")
             return
         loan.state = "returning"
-        if media:
-            loan.return_media_id = media[0]
-        _say(
-            chat_id,
-            "Return photo in. Condition is looking at the orange tape.",
-            "returning",
-            {"loan_id": loan.id},
-            loan,
-        )
+        photo = _photo_id(user, media)
+        if photo:
+            loan.return_media_id = photo
+        _say(chat_id, "returning", loan=loan)
         start_task("inspectReturn", loan.id)
         return
 
     if cmd.kind == CommandKind.SETTLE:
         if not is_lender:
-            send_text(chat_id, "Only the lender can SETTLE.")
+            _say(chat_id, "settle_not_lender")
             return
         loan = None
         if cmd.loan_id:
@@ -300,31 +368,33 @@ def handle_inbound(session: Session, event: dict) -> None:
         if loan is None:
             loan = _active_loan_for(session, user.id)
         if loan is None:
-            send_text(chat_id, "No loan to settle.")
+            _say(chat_id, "settle_no_loan")
             return
         if loan.stripe_refund_id:
-            send_text(chat_id, f"Already refunded {loan.stripe_refund_id}.")
+            _say(chat_id, "settle_already_refunded", refund_id=loan.stripe_refund_id)
             return
-        send_text(chat_id, "Clerk has to SETTLE this one in Band first.")
+        _say(chat_id, "settle_clerk_required")
         return
 
     if cmd.kind == CommandKind.CANCEL:
         loan = _active_loan_for(session, user.id)
         if loan is None or loan.state not in {"matching", "awaiting_deposit"}:
-            send_text(chat_id, "Nothing to cancel.")
+            _say(chat_id, "cancel_nothing")
             return
         loan.state = "cancelled"
         item = session.get(Item, loan.item_id)
         if item is not None and item.status == "reserved":
             item.status = "listed"
-        send_text(chat_id, "Cancelled. Item is listed again.")
+        _say(chat_id, "cancel_done")
         return
 
+    if media and _attach_loose_photo(session, user, media[0]):
+        return
     loan = _active_loan_for(session, user.id)
     if loan is not None and loan.state == "awaiting_deposit":
         if _confirm_payment_from_linq(session, loan):
             return
-        send_text(chat_id, "If you already paid, reply PAID. If not, use the pay link I sent.")
+        _say(chat_id, "paid_prompt")
         return
     send_text(chat_id, live_reply())
 
@@ -374,22 +444,16 @@ def _mark_deposit_paid(session: Session, loan: Loan, payment_intent_id: str | No
     if item is not None:
         item.status = "out"
     if loan.borrower_chat_id:
-        send_text(
-            loan.borrower_chat_id,
-            "Paid. Meet the lender. When you are holding it, reply GOT IT.",
-        )
+        _say(loan.borrower_chat_id, "deposit_paid_borrower")
         _safe_request_location(loan.borrower_chat_id)
     if loan.lender_chat_id:
-        send_text(
-            loan.lender_chat_id,
-            "Deposit paid. Hand the item over. When they have it, reply GOT IT.",
-        )
+        _say(loan.lender_chat_id, "deposit_paid_lender")
         _safe_request_location(loan.lender_chat_id)
     start_task("onDepositPaid", loan.id)
     if _try_hand_off(loan):
         for chat in (loan.borrower_chat_id, loan.lender_chat_id):
             if chat:
-                send_text(chat, "Both said GOT IT. Loan is out.")
+                _say(chat, "handoff_other")
         start_task("onHandoff", loan.id)
     return True
 
@@ -428,10 +492,7 @@ def handle_payment_succeeded(session: Session, event: dict) -> None:
             pi = str(pi) if pi else None
     if not _mark_deposit_paid(session, loan, pi):
         if loan.borrower_chat_id:
-            send_text(
-                loan.borrower_chat_id,
-                "Payment came in but I still need the Stripe id. Reply PAID in a few seconds.",
-            )
+            _say(loan.borrower_chat_id, "payment_missing_stripe_id")
 
 
 def _try_hand_off(loan: Loan) -> bool:
@@ -447,31 +508,29 @@ def _try_hand_off(loan: Loan) -> bool:
 
 def _settle(session: Session, loan: Loan, chat_id: str) -> None:
     if loan.stripe_refund_id:
-        send_text(chat_id, f"Already refunded {loan.stripe_refund_id}.")
+        _say(chat_id, "settle_already_refunded", refund_id=loan.stripe_refund_id)
         return
     if not loan.stripe_payment_intent_id:
-        send_text(chat_id, "No Stripe payment intent on this loan yet. Cannot refund.")
+        _say(chat_id, "settle_no_payment_intent")
         return
     try:
         amount = settle_loan(session, loan)
     except ValueError as exc:
-        send_text(chat_id, f"Cannot settle yet: {exc}")
+        _say(chat_id, "settle_blocked", reason=str(exc))
         return
     if loan.sandbox_id:
         from app.superserve_client import kill_sandbox
 
         kill_sandbox(loan.sandbox_id)
-    send_text(
+    _say(
         chat_id,
-        f"Returned. Lender {_dollars(loan.rental_cents)}. "
-        f"RigShare fee {_dollars(loan.platform_fee_cents)}. "
-        f"Refunded {_dollars(amount)}. It can take a few days to show on the card.",
+        "settle_receipt_lender",
+        rental=_dollars(loan.rental_cents),
+        fee=_dollars(loan.platform_fee_cents),
+        refund=_dollars(amount),
     )
     if loan.borrower_chat_id and loan.borrower_chat_id != chat_id:
-        send_text(
-            loan.borrower_chat_id,
-            f"Returned. Refunded {_dollars(amount)}. It can take a few days to show on the card. You're done.",
-        )
+        _say(loan.borrower_chat_id, "settle_receipt_borrower", refund=_dollars(amount))
     _send_status_link(loan)
 
 

@@ -2,23 +2,30 @@
 
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy import select
 
 from app.loans import handle_inbound
-from app.models import Item, Loan
+from app.models import Item, Loan, User
 
 LENDER = "+14159909839"
 BORROWER = "+17034051525"
 
 
-def _message(text: str, phone: str, chat_id: str, event_id: str = "evt") -> dict:
+def _message(text: str, phone: str, chat_id: str, event_id: str = "evt", media_id: str | None = None) -> dict:
+    parts: list[dict] = []
+    if text:
+        parts.append({"type": "text", "value": text})
+    if media_id:
+        parts.append({"type": "media", "id": media_id, "mime_type": "image/jpeg"})
     return {
         "event_id": event_id,
         "event_type": "message.received",
         "data": {
             "chat": {"id": chat_id},
             "sender_handle": {"handle": phone},
-            "parts": [{"type": "text", "value": text}],
+            "parts": parts,
         },
     }
 
@@ -90,3 +97,74 @@ def test_bare_usbc_matches_listed_charger(db, _fake_linq):
     db.flush()
     assert db.execute(select(Item)).scalars().one().sku == "usbc_charger"
     assert db.execute(select(Loan)).scalars().one().state == "matching"
+
+
+def test_lend_keeps_a_photo_sent_in_the_same_text(db, _fake_linq):
+    handle_inbound(db, _message("LEND HDMI", LENDER, "chat_lender", "e_lend", media_id="out_1"))
+    db.flush()
+    assert db.execute(select(Item)).scalars().one().outbound_media_id == "out_1"
+
+
+def test_lend_uses_a_photo_sent_just_before(db, _fake_linq):
+    handle_inbound(db, _message("", LENDER, "chat_lender", "e_pic", media_id="out_2"))
+    handle_inbound(db, _message("LEND HDMI", LENDER, "chat_lender", "e_lend"))
+    db.flush()
+    assert db.execute(select(Item)).scalars().one().outbound_media_id == "out_2"
+
+
+def test_photo_after_lend_fills_the_listing(db, _fake_linq):
+    handle_inbound(db, _message("LEND HDMI", LENDER, "chat_lender", "e_lend"))
+    handle_inbound(db, _message("", LENDER, "chat_lender", "e_pic", media_id="out_3"))
+    db.flush()
+    assert db.execute(select(Item)).scalars().one().outbound_media_id == "out_3"
+
+
+def _out_loan(db) -> Loan:
+    lender = User(id=uuid.uuid4().hex, phone=LENDER)
+    borrower = User(id=uuid.uuid4().hex, phone=BORROWER)
+    item = Item(
+        id=uuid.uuid4().hex,
+        sku="hdmi",
+        title="hdmi",
+        lender_user_id=lender.id,
+        status="out",
+        deposit_cents=1500,
+        rental_cents=300,
+        platform_fee_cents=200,
+        lender_chat_id="chat_lender",
+    )
+    loan = Loan(
+        id=uuid.uuid4().hex,
+        item_id=item.id,
+        borrower_user_id=borrower.id,
+        lender_user_id=lender.id,
+        state="out",
+        borrower_chat_id="chat_borrower",
+        lender_chat_id="chat_lender",
+        deposit_cents=1500,
+        rental_cents=300,
+        platform_fee_cents=200,
+        stripe_payment_intent_id="pi_photo",
+    )
+    db.add_all([lender, borrower, item, loan])
+    db.commit()
+    return loan
+
+
+def test_returning_uses_a_photo_sent_just_before(db, _fake_linq):
+    loan = _out_loan(db)
+    handle_inbound(db, _message("", BORROWER, "chat_borrower", "e_pic", media_id="ret_1"))
+    handle_inbound(db, _message("RETURNING", BORROWER, "chat_borrower", "e_ret"))
+    db.flush()
+    db.refresh(loan)
+    assert loan.return_media_id == "ret_1"
+    assert loan.state == "returning"
+
+
+def test_photo_after_returning_fills_the_loan(db, _fake_linq):
+    loan = _out_loan(db)
+    handle_inbound(db, _message("RETURNING", BORROWER, "chat_borrower", "e_ret"))
+    handle_inbound(db, _message("", BORROWER, "chat_borrower", "e_pic", media_id="ret_2"))
+    db.flush()
+    db.refresh(loan)
+    assert loan.return_media_id == "ret_2"

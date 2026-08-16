@@ -20,7 +20,7 @@ from app.disputes import ensure_dispute_token, router as disputes_router
 from app.product import load_state, sku_sort_key
 from app.survey import router as survey_router
 from app.linq_webhook import WebhookError, event_id, event_type, parse_event, verify_linq_signature
-from app.loans import handle_linq_event
+from app.loans import handle_linq_event, recover_photos_from_events
 from app.media import media_url
 from app.money import refund_cents
 from app.models import Item, Loan, record_event
@@ -137,6 +137,8 @@ def live(db: Session = Depends(get_db)) -> dict:
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+    if recover_photos_from_events(db):
+        db.commit()
     loans = db.execute(select(Loan).order_by(Loan.created_at.desc())).scalars().all()
     items = db.execute(select(Item).order_by(Item.created_at.desc())).scalars().all()
 
@@ -198,6 +200,8 @@ def home(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
 
 @app.get("/loans/{loan_id}", response_class=HTMLResponse)
 def loan_detail(loan_id: str, request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+    if recover_photos_from_events(db):
+        db.commit()
     loan = db.get(Loan, loan_id)
     if loan is None:
         return HTMLResponse("loan not found", status_code=404)
