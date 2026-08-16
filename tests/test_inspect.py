@@ -56,11 +56,12 @@ def test_inspect_allow_small_metric(db: Session, _fake_linq) -> None:
     assert result["blocked"] is False
     assert result["recommended"] == "ALLOW"
     db.refresh(loan)
-    assert loan.state == "inspecting"
+    assert loan.state == "returning"
+    assert loan.condition_verdict == "ALLOW"
     assert loan.compare_metric == 100
     assert loan.sandbox_id == f"sbx_{loan.id}"
     assert loan.terac_opportunity_id is None
-    assert not any("SETTLE" in text for _, text in _fake_linq.texts)
+    assert any("Clerk is settling" in text for _, text in _fake_linq.texts)
 
 
 def test_inspect_blocks_huge_metric(db: Session, _fake_linq) -> None:
@@ -79,10 +80,11 @@ def test_inspect_blocks_huge_metric(db: Session, _fake_linq) -> None:
     assert result["blocked"] is False
     assert result["recommended"] == "BLOCKED"
     db.refresh(loan)
-    assert loan.state == "inspecting"
+    assert loan.state == "blocked"
+    assert loan.condition_verdict == "BLOCKED"
     assert loan.compare_metric == BLOCK_METRIC + 1
     assert loan.terac_opportunity_id is None
-    assert not any("doesn't match" in text for _, text in _fake_linq.texts)
+    assert any("doesn't match" in text for _, text in _fake_linq.texts)
 
 
 def test_inspect_posts_signed_photo_urls(db: Session, _fake_linq, monkeypatch) -> None:
@@ -117,7 +119,8 @@ def test_inspect_skips_without_sandbox(db: Session) -> None:
     assert result["blocked"] is False
     assert result["recommended"] == "ALLOW"
     db.refresh(loan)
-    assert loan.state == "inspecting"
+    assert loan.state == "returning"
+    assert loan.condition_verdict == "ALLOW"
     assert loan.compare_metric is None
 
 

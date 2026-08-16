@@ -5,7 +5,7 @@ import time
 
 from sqlalchemy.orm import Session
 
-from app.agent_api import listed_candidates, pick_item
+from app.agent_api import apply_condition_verdict, listed_candidates, pick_item
 from app.band_client import create_loan_room, post_room_message
 from app.catalog import load_weights
 from app.config import get_settings
@@ -115,12 +115,33 @@ def run_inspect_return(session: Session, loan_id: str) -> dict:
             mention_agent_id=settings.band_condition_agent_id or None,
             mention_handle="Condition",
         )
+    wait = max(0, int(settings.condition_wait_seconds))
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        session.refresh(loan)
+        if loan.condition_verdict:
+            break
+        time.sleep(0.25)
+    if not loan.condition_verdict:
+        apply_condition_verdict(
+            session,
+            loan.id,
+            recommended,
+            event_id=f"timeout-condition-{loan.id}",
+            reason="ImageMagick recommendation; Condition did not write in time.",
+        )
     return {
         "ok": True,
         "blocked": False,
         "recommended": recommended,
         "metric": metric,
         "loan_id": loan_id,
+        "condition_verdict": loan.condition_verdict,
+        "condition_source": (
+            "timeout"
+            if (loan.condition_event_id or "").startswith("timeout-condition-")
+            else "agent"
+        ),
     }
 
 

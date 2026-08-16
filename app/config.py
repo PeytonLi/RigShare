@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     render_workflow_slug: str = ""
     require_clerk_settle: bool = True
     matcher_wait_seconds: int = 20
+    condition_wait_seconds: int = 20
     # Encoder models each carry their own key and are absent from GET /v1/models.
     # gliner2-base-v1 does not exist on this account; large-v1 is the real one.
     pioneer_api_key: str = ""

@@ -131,8 +131,10 @@ metric and a recommended `ALLOW` or `BLOCKED`. It does **not** write `blocked`
 and it does **not** open Terac.
 
 Condition's tool writes the verdict: `ALLOW` (loan back to `returning`) or
-`BLOCKED`. Happy path (`ALLOW`) never waits on Terac. Clerk `hire_inspector`
-is the only `run_open_dispute` caller.
+`BLOCKED`. If Condition does not write within `condition_wait_seconds`
+(default 20), inspect applies the ImageMagick recommendation itself — same
+pattern as Matcher timeout. Happy path (`ALLOW`) never waits on Terac. Clerk
+`hire_inspector` is the only `run_open_dispute` caller.
 
 Say this out loud (delete-test):
 
@@ -227,8 +229,8 @@ cannot refund.
 
 **Band console is dead.**
 Fall back to the Render task-run chain plus the dashboard state column. NEED
-stays `matching` (or times out with `matcher_source=timeout`); return stays
-`inspecting` until Condition can write. SMS `SETTLE` still does not refund.
+times out with `matcher_source=timeout`. Return times out with the ImageMagick
+recommendation after `condition_wait_seconds`. SMS `SETTLE` still does not refund.
 The delete-test story still holds: point at `settle` refusing without
 `clerk_settle_event_id`, then the curl hatch.
 
