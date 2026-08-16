@@ -5,8 +5,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 try:
+    from app.skus import fold_usbc as _fold_usbc
     from app.skus import resolve_sku as _skus_resolve_sku
 except ImportError:
+    _fold_usbc = None
     _skus_resolve_sku = None
 
 _SKU_ALIASES: dict[str, str] = {
@@ -21,7 +23,7 @@ _SKU_ALIASES: dict[str, str] = {
 
 
 def _local_resolve_sku(text: str) -> str | None:
-    lower = text.lower()
+    lower = _fold_usbc(text) if _fold_usbc is not None else text.lower()
     for alias, sku in _SKU_ALIASES.items():
         if alias in lower:
             return sku
@@ -65,6 +67,14 @@ class ParsedCommand:
 # The trailing boundary is what keeps "hdmi 6ft" and "usb-c 100w" out of the money:
 # a digit glued to letters is a spec, a standalone number is a price.
 _AMOUNT = re.compile(r"\$?\b(\d+(?:\.\d{1,2})?)\b(?![\w.])")
+
+
+def parse_amount_cents(text: str | None) -> int | None:
+    """First dollar amount in a span, in cents. For NER spans like "$15" or "15 bucks"."""
+    if not text:
+        return None
+    found = _AMOUNT.findall(text)
+    return int(round(float(found[0]) * 100)) if found else None
 
 
 def _parse_prices(text: str) -> tuple[int | None, int | None]:

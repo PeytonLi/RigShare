@@ -68,3 +68,16 @@ def test_yes_confirms_only_the_senders_own_listing(db, _fake_linq):
     handle_inbound(db, _message("YES", BORROWER, "chat_borrower", "e_yes"))
     db.flush()
     assert db.execute(select(Item)).scalars().one().status == "pending"
+
+
+def test_need_usb_c_with_space_or_dash_matches_listed_charger(db, _fake_linq):
+    handle_inbound(db, _message("LEND USB-C", LENDER, "chat_lender", "e_lend"))
+    handle_inbound(db, _message("YES", LENDER, "chat_lender", "e_yes"))
+    db.flush()
+    assert db.execute(select(Item)).scalars().one().sku == "usbc_charger"
+
+    handle_inbound(db, _message("he's needing USB C", BORROWER, "chat_b1", "e_need_space"))
+    db.flush()
+    loan = db.execute(select(Loan)).scalars().one()
+    assert loan.state == "matching"
+    assert any("usbc charger" in text for _, text in _fake_linq.texts)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 
@@ -66,12 +67,20 @@ def prohibited_item(text: str) -> str | None:
     return None
 
 
-def resolve_sku(text: str) -> str | None:
-    normalized = text.strip().lower()
+# People type "USB C", "USB- C", "USB - C". Those are the same connector as "USB-C".
+_USBC_SHAPE = re.compile(r"usb[\s\-–—]*c\b", re.IGNORECASE)
 
-    if "lightning to usb" in normalized or "lightning-usbc" in normalized:
+
+def fold_usbc(text: str) -> str:
+    return " ".join(_USBC_SHAPE.sub("usbc", text.strip().lower()).split())
+
+
+def resolve_sku(text: str) -> str | None:
+    normalized = fold_usbc(text)
+
+    if "lightning" in normalized and "usb" in normalized:
         return "lightning_usbc"
-    if "usb-c to hdmi" in normalized or "usbc hdmi" in normalized:
+    if "usbc" in normalized and "hdmi" in normalized:
         return "usbc_hdmi"
     if any(token in normalized for token in ("dongle", "hub", "multiport")):
         return "usbc_hub"
@@ -79,10 +88,7 @@ def resolve_sku(text: str) -> str | None:
         return "hdmi"
     if "lightning" in normalized:
         return "lightning_cable"
-    if any(
-        token in normalized
-        for token in ("usb-c", "usbc", "charger", "gan", "anker")
-    ):
+    if any(token in normalized for token in ("usbc", "charger", "gan", "anker")):
         return "usbc_charger"
 
     return None

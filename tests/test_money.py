@@ -96,6 +96,10 @@ class TestSkus:
         [
             ("usb-c", "usbc_charger"),
             ("usbc", "usbc_charger"),
+            ("usb c", "usbc_charger"),
+            ("usb - c", "usbc_charger"),
+            ("usb- c", "usbc_charger"),
+            ("USB -C", "usbc_charger"),
             ("charger", "usbc_charger"),
             ("gan", "usbc_charger"),
             ("anker", "usbc_charger"),
@@ -106,6 +110,7 @@ class TestSkus:
             ("hub", "usbc_hub"),
             ("multiport", "usbc_hub"),
             ("usb-c to hdmi", "usbc_hdmi"),
+            ("usb c to hdmi", "usbc_hdmi"),
             ("usbc hdmi", "usbc_hdmi"),
             ("lightning to usb", "lightning_usbc"),
             ("lightning-usbc", "lightning_usbc"),
