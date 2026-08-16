@@ -128,6 +128,7 @@ def sweepOverdue(loan_id: str = "") -> dict:
     from sqlalchemy import select
 
     from app.linq_client import send_text
+    from app.replies import render
 
     grace = timedelta(hours=2)
     db = _session()
@@ -157,13 +158,9 @@ def sweepOverdue(loan_id: str = "") -> dict:
             loan.overdue_notified_at = now
             chased.append(loan.id)
             if loan.borrower_chat_id:
-                send_text(
-                    loan.borrower_chat_id,
-                    "Your RigShare loan is past due. Reply RETURNING with a photo of "
-                    "the item and the tape. If it does not come back the deposit is kept.",
-                )
+                send_text(loan.borrower_chat_id, render("overdue_borrower"))
             if loan.lender_chat_id:
-                send_text(loan.lender_chat_id, "Your item is overdue. We pinged the borrower.")
+                send_text(loan.lender_chat_id, render("overdue_lender"))
             if loan.band_room_id:
                 post_room_message(
                     loan.band_room_id,

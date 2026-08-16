@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.money import MoneyQuote, PriceRejected, quote
+from app.replies import render
 from app.skus import prohibited_item
 
 
@@ -33,10 +34,7 @@ def review_listing(
         return CounselDecision(
             allowed=False,
             reason=banned,
-            message=(
-                f"Counsel refused: we can't hold a {banned}. "
-                "RigShare is for cheap gear people forget. Not that."
-            ),
+            message=render("counsel_prohibited", banned=banned),
         )
     try:
         money = quote(
@@ -49,6 +47,6 @@ def review_listing(
         return CounselDecision(
             allowed=False,
             reason="price",
-            message=f"Counsel refused: {exc}",
+            message=render("counsel_price", reason=str(exc)),
         )
     return CounselDecision(allowed=True, reason=None, message="", money=money)

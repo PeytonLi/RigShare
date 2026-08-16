@@ -59,6 +59,66 @@ def test_home_recovers_photos_from_stored_webhooks(client, db):
     assert b"/media/media_back" in page.content
 
 
+def test_recovery_keeps_photos_per_chat_not_phone_wide(client, db):
+    """Two loans from the same borrower must each get their own return photo.
+
+    The old recovery assigned the single most-recent photo that phone ever sent
+    to every blank loan, so outbound and return showed the same wrong image.
+    """
+    from app.models import User, record_event
+
+    lender = User(phone="+14159909839")
+    borrower = User(phone="+17034051525")
+    db.add_all([lender, borrower])
+    db.flush()
+    items = []
+    loans = []
+    for idx, (item_id, loan_id, chat) in enumerate(
+        [("item_a", "loan_a", "chat_b_a"), ("item_b", "loan_b", "chat_b_b")]
+    ):
+        item = Item(
+            id=item_id,
+            sku="hdmi",
+            title="hdmi",
+            lender_user_id=lender.id,
+            status="out",
+            deposit_cents=1500,
+            rental_cents=300,
+            platform_fee_cents=200,
+            lender_chat_id=f"chat_l_{idx}",
+        )
+        loan = Loan(
+            id=loan_id,
+            item_id=item.id,
+            borrower_user_id=borrower.id,
+            lender_user_id=lender.id,
+            state="returning",
+            borrower_chat_id=chat,
+            deposit_cents=1500,
+            rental_cents=300,
+            platform_fee_cents=200,
+        )
+        db.add_all([item, loan])
+        items.append(item)
+        loans.append(loan)
+    db.flush()
+
+    # Same borrower, two chats, two distinct return photos -- newest first.
+    back_a = message_received_payload(text="", chat_id="chat_b_a", from_phone=borrower.phone, event_id="evt_back_a")
+    back_a["data"]["parts"] = [{"type": "media", "id": "media_back_a", "mime_type": "image/jpeg"}]
+    back_b = message_received_payload(text="", chat_id="chat_b_b", from_phone=borrower.phone, event_id="evt_back_b")
+    back_b["data"]["parts"] = [{"type": "media", "id": "media_back_b", "mime_type": "image/jpeg"}]
+    record_event(db, "evt_back_a", "message.received", back_a)
+    record_event(db, "evt_back_b", "message.received", back_b)
+    db.commit()
+
+    client.get("/")
+    db.expire_all()
+    assert db.get(Loan, "loan_a").return_media_id == "media_back_a"
+    assert db.get(Loan, "loan_b").return_media_id == "media_back_b"
+    assert db.get(Loan, "loan_a").return_media_id != db.get(Loan, "loan_b").return_media_id
+
+
 def test_home_lists_empty(client):
     response = client.get("/")
     assert response.status_code == 200

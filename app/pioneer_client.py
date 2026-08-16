@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -30,7 +31,7 @@ log = logging.getLogger("rigshare")
 
 PIONEER_URL = "https://api.pioneer.ai/v1/chat/completions"
 
-NER_ENTITIES = ["intent", "item", "brand", "connector", "duration", "rental_fee"]
+NER_ENTITIES = ["intent", "item", "connector", "deposit", "rental_fee"]
 PII_ENTITIES = ["person", "email", "phone_number"]
 
 _post: Callable[[str, dict[str, str], dict[str, Any]], dict[str, Any]] | None = None
@@ -195,4 +196,21 @@ def compose_reply(
     text = content.strip()
     if not text:
         return fallback, "template"
+    if not _money_survived(fallback, text):
+        # The prompt says keep amounts exact; this is what happens when it doesn't.
+        # A rewritten deposit is a wrong number in a receipt, so ship the template.
+        log.warning("decoder altered a dollar amount; using template for %s", template_key)
+        return fallback, "template"
     return text, "decoder"
+
+
+_MONEY = re.compile(r"\$\d+(?:\.\d{2})?")
+
+
+def _money_survived(fallback: str, rewritten: str) -> bool:
+    """Every dollar amount in the template must appear in the rewrite, unchanged."""
+    wanted = _MONEY.findall(fallback)
+    if not wanted:
+        return True
+    got = _MONEY.findall(rewritten)
+    return all(amount in got for amount in wanted)

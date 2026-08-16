@@ -23,7 +23,9 @@ from app.config import get_settings
 
 PIONEER = "https://api.pioneer.ai"
 DATASET = "rigshare-borrow-sms"
-LABELS = ["intent", "item", "brand", "connector", "duration", "rental_fee"]
+# `deposit` and `rental_fee` are what let a lender price an item in plain
+# English; the regex in commands.py only catches typed numbers.
+LABELS = ["intent", "item", "brand", "connector", "duration", "deposit", "rental_fee"]
 
 
 def _headers(key: str) -> dict[str, str]:
@@ -66,7 +68,8 @@ def main() -> int:
                 "domain_description": (
                     "Hackathon and conference iMessage texts about borrowing or lending "
                     "USB-C chargers, Lightning cables, HDMI, dongles, and clickers. "
-                    "Short SMS. Intent is lend or borrow/need."
+                    "Short SMS. Intent is lend or borrow/need. Lenders often name their own "
+                    "price: a deposit to hold and a smaller rental fee for themselves."
                 ),
             },
         )

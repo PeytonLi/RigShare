@@ -79,14 +79,19 @@ def _photo_id(user, media: list[str]) -> str | None:
     return media[0] if media else user.last_media_id
 
 
-def _attach_loose_photo(session: Session, user, media_id: str) -> bool:
-    """A photo often arrives as its own iMessage, then LEND / RETURNING follows."""
+def _attach_loose_photo(session: Session, user, media_id: str, chat_id: str | None = None) -> bool:
+    """A photo often arrives as its own iMessage, then LEND / RETURNING follows.
+
+    Scoped to the chat it actually arrived in when one is known; a photo from a
+    different conversation must never fill a blank in another loan's photos.
+    """
     item = session.execute(
         select(Item)
         .where(
             Item.lender_user_id == user.id,
             Item.outbound_media_id.is_(None),
             Item.status.in_(("pending", "listed", "reserved", "out")),
+            Item.lender_chat_id == chat_id if chat_id else True,
         )
         .order_by(Item.created_at.desc())
     ).scalars().first()
@@ -101,6 +106,7 @@ def _attach_loose_photo(session: Session, user, media_id: str) -> bool:
             Loan.state.in_(
                 ("out", "returning", "inspecting", "settling", "blocked", "closed")
             ),
+            Loan.borrower_chat_id == chat_id if chat_id else True,
         )
         .order_by(Loan.created_at.desc())
     ).scalars().first()
@@ -110,41 +116,90 @@ def _attach_loose_photo(session: Session, user, media_id: str) -> bool:
     return False
 
 
-def recover_photos_from_events(session: Session) -> bool:
-    """Fill blank outbound/return ids from stored Linq webhooks (split photo texts)."""
-    items = session.execute(select(Item).where(Item.outbound_media_id.is_(None))).scalars().all()
-    loans = session.execute(select(Loan).where(Loan.return_media_id.is_(None))).scalars().all()
-    if not items and not loans:
-        return False
-    by_phone: dict[str, list[str]] = {}
+def _media_timeline(
+    session: Session,
+) -> list[tuple[datetime, str | None, str | None, str]]:
+    """[(arrived_at, chat_id, phone, media_id)] for every media-bearing message."""
+    timeline: list[tuple[datetime, str | None, str | None, str]] = []
     rows = session.execute(
         select(ProcessedEvent)
         .where(ProcessedEvent.event_type == "message.received")
-        .order_by(ProcessedEvent.created_at.desc())
+        .order_by(ProcessedEvent.created_at.asc())
     ).scalars().all()
     for row in rows:
         try:
             payload = json.loads(row.payload_json)
         except json.JSONDecodeError:
             continue
+        chat = inbound_chat_id(payload)
         phone = inbound_from_phone(payload)
-        ids = inbound_media_ids(payload)
-        if not phone or not ids:
+        for media_id in inbound_media_ids(payload):
+            timeline.append((row.created_at, chat, phone, media_id))
+    return timeline
+
+
+def _nearest_media(
+    timeline: list[tuple[datetime, str | None, str | None, str]],
+    *,
+    chat: str | None = None,
+    phone: str | None = None,
+    anchor: datetime,
+) -> str | None:
+    """The media id closest in time to `anchor` that matches the filters."""
+    best: str | None = None
+    best_delta: float | None = None
+    for arrived, hit_chat, hit_phone, media_id in timeline:
+        if chat is not None and hit_chat != chat:
             continue
-        by_phone.setdefault(phone, []).extend(ids)
-    changed = False
+        if phone is not None and hit_phone != phone:
+            continue
+        delta = abs((arrived - anchor).total_seconds())
+        if best_delta is None or delta < best_delta:
+            best_delta = delta
+            best = media_id
+    return best
+
+
+def recover_photos_from_events(session: Session) -> bool:
+    """Backfill outbound/return ids from stored Linq webhooks (split photo texts).
+
+    Matches by chat + time, not "the most recent photo that phone ever sent".
+    The old phone-wide match stamped the same latest photo onto every listing and
+    every return, which is why the dashboard showed identical outbound/return
+    images that belonged to no specific loan. A chat-correlated match also
+    overwrites a wrong id, so already-polluted rows heal on the next page load.
+    """
+    timeline = _media_timeline(session)
+    if not timeline:
+        return False
+    items = session.execute(select(Item)).scalars().all()
+    loans = session.execute(select(Loan)).scalars().all()
+    if not items and not loans:
+        return False
     users = {u.id: u for u in session.execute(select(User)).scalars().all()}
+    changed = False
     for item in items:
-        lender = users.get(item.lender_user_id)
-        found = by_phone.get(lender.phone) if lender is not None else None
-        if found:
-            item.outbound_media_id = found[0]
+        matched = None
+        if item.lender_chat_id:
+            matched = _nearest_media(timeline, chat=item.lender_chat_id, anchor=item.created_at)
+        if matched is None:
+            lender = users.get(item.lender_user_id)
+            if lender is not None and lender.phone:
+                matched = _nearest_media(timeline, phone=lender.phone, anchor=item.created_at)
+        if matched and matched != item.outbound_media_id:
+            item.outbound_media_id = matched
             changed = True
     for loan in loans:
-        borrower = users.get(loan.borrower_user_id)
-        found = by_phone.get(borrower.phone) if borrower is not None else None
-        if found:
-            loan.return_media_id = found[0]
+        anchor = loan.updated_at or loan.created_at
+        matched = None
+        if loan.borrower_chat_id:
+            matched = _nearest_media(timeline, chat=loan.borrower_chat_id, anchor=anchor)
+        if matched is None:
+            borrower = users.get(loan.borrower_user_id)
+            if borrower is not None and borrower.phone:
+                matched = _nearest_media(timeline, phone=borrower.phone, anchor=anchor)
+        if matched and matched != loan.return_media_id:
+            loan.return_media_id = matched
             changed = True
     return changed
 
@@ -207,7 +262,7 @@ def handle_inbound(session: Session, event: dict) -> None:
     if media:
         user.last_media_id = media[0]
     if not text.strip() and media:
-        _attach_loose_photo(session, user, media[0])
+        _attach_loose_photo(session, user, media[0], chat_id)
         return
     cmd = enrich_command(text, parse_command(text))
     if cmd.kind == "UNSAFE":
@@ -388,7 +443,7 @@ def handle_inbound(session: Session, event: dict) -> None:
         _say(chat_id, "cancel_done")
         return
 
-    if media and _attach_loose_photo(session, user, media[0]):
+    if media and _attach_loose_photo(session, user, media[0], chat_id):
         return
     loan = _active_loan_for(session, user.id)
     if loan is not None and loan.state == "awaiting_deposit":
